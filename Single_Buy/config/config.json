@@ -1,0 +1,92 @@
+{
+  "api": {
+    "key_id": "PKUWEJLYI5NDIIYIXFHMH4SHGT",
+    "secret_key": "jsbDo612oHJqvvUQBSBJcde2zbfmxLQy9c12oKqqTz9",
+    "base_url": "https://paper-api.alpaca.markets"
+  },
+  "trading_rules": {
+    "max_open_positions": 15,
+    "max_trades_per_stock": 2,
+    "max_trades_per_day": 3,
+    "min_signal_score": 2,
+    "prevent_same_day_reentry": true,
+    "watchlist_file": "config/watchlist.txt",
+    "exclusion_file": "config/exclusionlist.txt",
+    "sell_watchlist_file": "config/selllist.txt",
+    "log_excluded_symbols": true,
+    "portfolio_mode": "watchlist_only",
+    "specific_stocks": [],
+    "max_equity_utilization_pct": 0.9,
+    "enable_dynamic_position_limits": true,
+    "capital_conservation_mode": false,
+    "max_allocation_per_stock_pct": 0.06,
+    "per_trade_pct": 0.03,
+    "enable_swing_signals": true,
+    "enable_21touch_signals": false,
+    "enable_50touch_signals": false
+  },
+  "position_sizing": {
+    "mode": "percent_equity",
+    "percent_of_equity": 0.03,
+    "fixed_amount": 5000,
+    "base_amount": 50000,
+    "percent_of_amount": 0.03
+  },
+  "strategy_params": {
+    "min_signal_score": 2,
+    "min_listing_days": 200,
+    "sma_fast": 50,
+    "sma_slow": 200,
+    "ema_trend": 21,
+    "pullback_days": 4,
+    "pullback_pct": 5.0,
+    "stalling_days_long": 8,
+    "stalling_days_short": 3,
+    "stalling_range_pct": 5.0,
+    "enable_extended_filter": true,
+    "max_gap_pct": 0.05,
+    "lookback_for_gap": 1,
+    "ma_touch_threshold_pct": 0.025,
+    "ema_tolerance_pct": 0.025,
+    "touch_min_stay_days": 5,
+    "touch_lookback_months": 2,
+    "touch_min_body_pct": 0.4,
+    "touch_stalling_days_long": 3,
+    "touch_stalling_days_short": 1
+  },
+  "risk_management": {
+    "initial_stop_loss_pct": 0.17,
+    "tier_1_profit_pct": 0.05,
+    "tier_1_stop_loss_pct": 0.09,
+    "tier_2_profit_pct": 0.1,
+    "tier_2_stop_loss_pct": 0.01,
+    "max_hold_days": 21,
+    "stop_loss_mode": "closing_basis",
+    "max_loss_mode": "percent",
+    "max_loss_pct": 0.02,
+    "max_loss_dollars": 500,
+    "var_enabled": true,
+    "var_confidence_level": 0.95,
+    "var_time_horizon_days": 1,
+    "var_method": "historical",
+    "var_lookback_days": 252
+  },
+  "profit_taking": {
+    "enable_partial_exits": true,
+    "target_1_pct": 0.1,
+    "target_1_qty": 0.333,
+    "target_2_pct": 0.15,
+    "target_2_qty": 0.333,
+    "target_3_pct": 0.2,
+    "target_3_qty": 0.334
+  },
+  "execution_schedule": {
+    "buy_window_start_time": "13:00",
+    "buy_window_end_time": "15:59",
+    "enable_smart_execution": false,
+    "signal_monitoring_minutes": 15,
+    "top_n_trades": 5,
+    "default_interval_seconds": 120,
+    "last_hour_interval_seconds": 60
+  }
+}

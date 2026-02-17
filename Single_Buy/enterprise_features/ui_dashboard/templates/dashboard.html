@@ -1,0 +1,372 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Rajat Alpha v67 - Trading Dashboard</title>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <style>
+        body { font-family: Arial, sans-serif; margin: 20px; background-color: #f5f5f5; }
+        .container { max-width: 1200px; margin: 0 auto; }
+        .header { text-align: center; margin-bottom: 30px; }
+        .card { background: white; border-radius: 8px; padding: 20px; margin: 10px 0; box-shadow: 0 2px 4px rgba(0,0,0,0.1); }
+        .metric { display: inline-block; margin: 10px; text-align: center; }
+        .metric-value { font-size: 24px; font-weight: bold; color: #2c3e50; }
+        .metric-label { font-size: 14px; color: #7f8c8d; }
+        .positive { color: #27ae60; }
+        .negative { color: #e74c3c; }
+        table { width: 100%; border-collapse: collapse; margin-top: 10px; }
+        th, td { padding: 8px; text-align: left; border-bottom: 1px solid #ddd; }
+        th { background-color: #f8f9fa; }
+        .chart-container { position: relative; height: 400px; width: 100%; }
+        /* Tooltip styling */
+        [title] { position: relative; }
+        [title]:hover::after {
+            content: attr(title);
+            position: absolute;
+            bottom: 100%;
+            left: 50%;
+            transform: translateX(-50%);
+            background-color: #333;
+            color: #fff;
+            padding: 8px 12px;
+            border-radius: 4px;
+            font-size: 12px;
+            white-space: pre-line;
+            z-index: 1000;
+            max-width: 300px;
+            word-wrap: break-word;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>Rajat Alpha v67 Trading Dashboard</h1>
+            <p>Real-time Portfolio and Performance Analytics</p>
+        </div>
+
+        <!-- Portfolio Overview -->
+        <div class="card">
+            <h2>Portfolio Overview</h2>
+            <div id="portfolio-metrics"></div>
+            <h3>Open Positions</h3>
+            <table id="positions-table">
+                <thead>
+                    <tr>
+                        <th>Symbol</th>
+                        <th>Entry Date</th>
+                        <th>Quantity</th>
+                        <th>Entry Price</th>
+                        <th>Stop Loss</th>
+                        <th>Score</th>
+                        <th>Pattern</th>
+                    </tr>
+                </thead>
+                <tbody></tbody>
+            </table>
+        </div>
+
+        <!-- Performance Metrics -->
+        <div class="card">
+            <h2>Performance Metrics</h2>
+            <div id="performance-metrics"></div>
+        </div>
+
+        <!-- Risk Metrics (VaR) -->
+        <div class="card">
+            <h2>Risk Metrics - Value at Risk</h2>
+            <div id="var-metrics"></div>
+        </div>
+
+        <!-- Performance by Score -->
+        <div class="card">
+            <h2>Performance by Signal Score</h2>
+            <div class="chart-container">
+                <canvas id="scoreChart"></canvas>
+            </div>
+        </div>
+
+        <!-- Performance by Pattern -->
+        <div class="card">
+            <h2>Performance by Pattern</h2>
+            <div class="chart-container">
+                <canvas id="patternChart"></canvas>
+            </div>
+        </div>
+
+        <!-- Recent Signals -->
+        <div class="card">
+            <h2>Recent Signals</h2>
+            <table id="signals-table">
+                <thead>
+                    <tr>
+                        <th>Symbol</th>
+                        <th>Date</th>
+                        <th>Score</th>
+                        <th>Pattern</th>
+                        <th>Price</th>
+                        <th>Executed</th>
+                    </tr>
+                </thead>
+                <tbody></tbody>
+            </table>
+        </div>
+
+        <!-- Active Signals During Market Hours -->
+        <div class="card" id="active-signals-card" style="display: none;">
+            <h2>🔴 Active Signals - Market Open</h2>
+            <div id="market-status"></div>
+            <table id="active-signals-table">
+                <thead>
+                    <tr>
+                        <th>Stock Ticker</th>
+                        <th>Rating</th>
+                        <th>Price</th>
+                        <th>Signal Type</th>
+                        <th>Time</th>
+                    </tr>
+                </thead>
+                <tbody></tbody>
+            </table>
+        </div>
+    </div>
+
+    <script>
+        // Load data on page load
+        document.addEventListener('DOMContentLoaded', function() {
+            loadPortfolio();
+            loadPerformance();
+            loadVaR();
+            loadSignals();
+            loadScorePerformance();
+            loadPatternPerformance();
+            loadActiveSignals();
+        });
+
+        function loadPortfolio() {
+            fetch('/api/portfolio')
+                .then(response => response.json())
+                .then(data => {
+                    // Update metrics
+                    const metricsDiv = document.getElementById('portfolio-metrics');
+                    metricsDiv.innerHTML = `
+                        <div class="metric">
+                            <div class="metric-value">${data.total_positions}</div>
+                            <div class="metric-label">Open Positions</div>
+                        </div>
+                        <div class="metric">
+                            <div class="metric-value">$${data.total_value.toLocaleString()}</div>
+                            <div class="metric-label">Portfolio Value</div>
+                        </div>
+                    `;
+
+                    // Update positions table
+                    const tbody = document.querySelector('#positions-table tbody');
+                    tbody.innerHTML = '';
+                    data.positions.forEach(pos => {
+                        tbody.innerHTML += `
+                            <tr>
+                                <td>${pos.symbol}</td>
+                                <td>${new Date(pos.entry_date).toLocaleDateString()}</td>
+                                <td>${pos.quantity}</td>
+                                <td>$${pos.entry_price.toFixed(2)}</td>
+                                <td>$${pos.stop_loss.toFixed(2)}</td>
+                                <td>${pos.score}</td>
+                                <td>${pos.pattern}</td>
+                            </tr>
+                        `;
+                    });
+                });
+        }
+
+        function loadPerformance() {
+            fetch('/api/performance')
+                .then(response => response.json())
+                .then(data => {
+                    const metricsDiv = document.getElementById('performance-metrics');
+                    metricsDiv.innerHTML = `
+                        <div class="metric">
+                            <div class="metric-value">${data.total_trades}</div>
+                            <div class="metric-label">Total Trades</div>
+                        </div>
+                        <div class="metric">
+                            <div class="metric-value ${data.win_rate >= 50 ? 'positive' : 'negative'}">${data.win_rate}%</div>
+                            <div class="metric-label">Win Rate</div>
+                        </div>
+                        <div class="metric">
+                            <div class="metric-value ${data.avg_return >= 0 ? 'positive' : 'negative'}">${data.avg_return}%</div>
+                            <div class="metric-label">Avg Return</div>
+                        </div>
+                    `;
+                });
+        }
+
+        function loadVaR() {
+            fetch('/api/var')
+                .then(response => response.json())
+                .then(data => {
+                    const metricsDiv = document.getElementById('var-metrics');
+                    if (data.var_95) {
+                        metricsDiv.innerHTML = `
+                            <div class="metric">
+                                <div class="metric-value negative">${(data.var_95 * 100).toFixed(2)}%</div>
+                                <div class="metric-label">95% VaR (Daily)</div>
+                            </div>
+                            <div class="metric">
+                                <div class="metric-value negative">${(data.summary.expected_shortfall * 100).toFixed(2)}%</div>
+                                <div class="metric-label">Expected Shortfall</div>
+                            </div>
+                            <p><small>${data.note}</small></p>
+                        `;
+                    } else {
+                        metricsDiv.innerHTML = '<p>Insufficient data for VaR calculation</p>';
+                    }
+                });
+        }
+
+        function loadSignals() {
+            fetch('/api/signals')
+                .then(response => response.json())
+                .then(data => {
+                    const tbody = document.querySelector('#signals-table tbody');
+                    tbody.innerHTML = '';
+                    data.signals.forEach(signal => {
+                        tbody.innerHTML += `
+                            <tr>
+                                <td>${signal.symbol}</td>
+                                <td>${new Date(signal.signal_date).toLocaleDateString()}</td>
+                                <td>${signal.score}</td>
+                                <td>${signal.pattern}</td>
+                                <td>$${signal.price.toFixed(2)}</td>
+                                <td>${signal.executed ? 'Yes' : 'No'}</td>
+                            </tr>
+                        `;
+                    });
+                });
+        }
+
+        function loadScorePerformance() {
+            fetch('/api/performance_by_score')
+                .then(response => response.json())
+                .then(data => {
+                    const ctx = document.getElementById('scoreChart').getContext('2d');
+                    new Chart(ctx, {
+                        type: 'bar',
+                        data: {
+                            labels: data.data.map(d => `Score ${d.score}`),
+                            datasets: [{
+                                label: 'Win Rate (%)',
+                                data: data.data.map(d => d.win_rate),
+                                backgroundColor: 'rgba(54, 162, 235, 0.5)',
+                                borderColor: 'rgba(54, 162, 235, 1)',
+                                borderWidth: 1
+                            }]
+                        },
+                        options: {
+                            responsive: true,
+                            scales: {
+                                y: {
+                                    beginAtZero: true,
+                                    max: 100
+                                }
+                            }
+                        }
+                    });
+                });
+        }
+
+        function loadPatternPerformance() {
+            fetch('/api/performance_by_pattern')
+                .then(response => response.json())
+                .then(data => {
+                    const ctx = document.getElementById('patternChart').getContext('2d');
+                    new Chart(ctx, {
+                        type: 'bar',
+                        data: {
+                            labels: data.data.map(d => d.pattern),
+                            datasets: [{
+                                label: 'Win Rate (%)',
+                                data: data.data.map(d => d.win_rate),
+                                backgroundColor: 'rgba(255, 99, 132, 0.5)',
+                                borderColor: 'rgba(255, 99, 132, 1)',
+                                borderWidth: 1
+                            }]
+                        },
+                        options: {
+                            responsive: true,
+                            scales: {
+                                y: {
+                                    beginAtZero: true,
+                                    max: 100
+                                }
+                            }
+                        }
+                    });
+                });
+        }
+
+        function loadActiveSignals() {
+            fetch('/api/active_signals')
+                .then(response => response.json())
+                .then(data => {
+                    const card = document.getElementById('active-signals-card');
+                    const statusDiv = document.getElementById('market-status');
+                    const tbody = document.querySelector('#active-signals-table tbody');
+
+                    if (data.market_open && data.signals.length > 0) {
+                        // Market is open and we have signals
+                        card.style.display = 'block';
+                        statusDiv.innerHTML = `<p style="color: #27ae60; font-weight: bold;">${data.message}</p>`;
+
+                        tbody.innerHTML = '';
+                        data.signals.forEach(signal => {
+                            const signalTime = new Date(signal.created_at).toLocaleTimeString();
+                            const ratingDetails = signal.reason ?
+                                `Rating Calculation:\n${signal.reason}\n\nScore: ${signal.score}/5` :
+                                `Signal Score: ${signal.score}/5\nBased on technical analysis patterns and market conditions.`;
+
+                            const ratingTooltip = `${ratingDetails}\n\nStock: ${signal.symbol}\nPattern: ${signal.pattern}\nPrice: $${signal.price.toFixed(2)}\nTime: ${signalTime}`;
+
+                            tbody.innerHTML += `
+                                <tr>
+                                    <td><strong style="font-size: 16px; color: #2c3e50;">${signal.symbol}</strong></td>
+                                    <td>
+                                        <span style="color: #f39c12; font-weight: bold; font-size: 16px; cursor: help;"
+                                              title="${ratingTooltip}">
+                                            ${signal.score}/5
+                                        </span>
+                                    </td>
+                                    <td><span style="font-weight: bold; color: #27ae60;">$${signal.price.toFixed(2)}</span></td>
+                                    <td><span style="background-color: #ecf0f1; padding: 2px 6px; border-radius: 3px; font-weight: bold;">${signal.pattern}</span></td>
+                                    <td><small style="color: #7f8c8d;">${signalTime}</small></td>
+                                </tr>
+                            `;
+                        });
+                    } else if (data.market_open && data.signals.length === 0) {
+                        // Market is open but no signals
+                        card.style.display = 'block';
+                        statusDiv.innerHTML = `<p style="color: #f39c12;">${data.message} - No active signals at this time</p>`;
+                        tbody.innerHTML = '<tr><td colspan="5" style="text-align: center; color: #7f8c8d;">Waiting for signals...</td></tr>';
+                    } else {
+                        // Market is closed
+                        card.style.display = 'none';
+                    }
+                })
+                .catch(error => {
+                    console.error('Error loading active signals:', error);
+                    const card = document.getElementById('active-signals-card');
+                    card.style.display = 'none';
+                });
+        }
+
+        // Auto-refresh every 30 seconds
+        setInterval(() => {
+            loadPortfolio();
+            loadPerformance();
+            loadVaR();
+            loadActiveSignals();  // Refresh active signals during market hours
+        }, 30000);
+    </script>
+</body>
+</html>

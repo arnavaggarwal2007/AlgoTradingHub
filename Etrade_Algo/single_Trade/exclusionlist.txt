@@ -1,0 +1,19 @@
+# EXCLUSION LIST - Stocks to Skip in Analysis
+# One symbol per line
+# Lines starting with # are comments
+#
+# Use this to exclude:
+# - Stocks you already own outside this bot
+# - Stocks with known issues (earnings, splits, etc.)
+# - Sectors you want to avoid
+# - Low-quality stocks that pass filters but you don't trust
+#
+# Example entries:
+# TSLA
+# NVDA
+# AAPL
+#
+# The bot will load watchlist.txt and remove any symbols listed here.
+# Currently empty - add symbols below as needed:
+
+

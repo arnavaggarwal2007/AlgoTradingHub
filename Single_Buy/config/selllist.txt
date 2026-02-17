@@ -1,0 +1,3 @@
+# Sell Watchlist - Only monitor these symbols for sell signals
+# If this file is empty or missing, all positions will be monitored
+# Format: One symbol per line

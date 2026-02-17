@@ -1,0 +1,40 @@
+2026-01-11 22:14:27,656 | INFO | Configuration loaded from config_dual.json
+2026-01-11 22:14:27,657 | INFO | Configuration validation passed
+2026-01-11 22:14:27,690 | INFO | ================================================================================
+2026-01-11 22:14:27,691 | INFO | RAJAT ALPHA V67 DUAL BUY TRADING BOT INITIALIZED
+2026-01-11 22:14:27,692 | INFO | Mode: PAPER TRADING
+2026-01-11 22:14:27,692 | INFO | Max B1 Positions: 2
+2026-01-11 22:14:27,693 | INFO | Max B2 Positions: 2
+2026-01-11 22:14:27,694 | INFO | B2 Min Score: 3
+2026-01-11 22:14:27,694 | INFO | ================================================================================
+2026-01-11 22:14:27,695 | INFO | Starting main execution loop...
+2026-01-11 22:14:34,081 | INFO | Market closed. Sleeping for 5 minutes...
+2026-01-11 22:17:07,057 | INFO | Bot stopped by user (Ctrl+C)
+2026-01-12 21:10:32,037 | INFO | Configuration loaded from config_dual.json
+2026-01-12 21:10:32,037 | INFO | Configuration validation passed
+2026-01-12 21:10:32,040 | INFO | ================================================================================
+2026-01-12 21:10:32,041 | INFO | RAJAT ALPHA V67 DUAL BUY TRADING BOT INITIALIZED
+2026-01-12 21:10:32,041 | INFO | Mode: PAPER TRADING
+2026-01-12 21:10:32,041 | INFO | Max B1 Positions: 2
+2026-01-12 21:10:32,042 | INFO | Max B2 Positions: 2
+2026-01-12 21:10:32,042 | INFO | B2 Min Score: 3
+2026-01-12 21:10:32,042 | INFO | ================================================================================
+2026-01-12 21:10:32,042 | INFO | Starting main execution loop...
+2026-01-12 21:10:32,128 | INFO | Market closed. Sleeping for 5 minutes...
+2026-01-12 21:10:41,862 | INFO | Bot stopped by user (Ctrl+C)
+2026-01-19 18:51:34,248 | INFO | Configuration loaded from config_dual.json
+2026-01-19 18:51:34,250 | INFO | Configuration validation passed
+2026-01-19 18:51:34,258 | INFO | ================================================================================
+2026-01-19 18:51:34,259 | INFO | RAJAT ALPHA V67 DUAL BUY TRADING BOT INITIALIZED
+2026-01-19 18:51:34,259 | INFO | Mode: PAPER TRADING
+2026-01-19 18:51:34,260 | INFO | Max B1 Positions: 2
+2026-01-19 18:51:34,260 | INFO | Max B2 Positions: 2
+2026-01-19 18:51:34,261 | INFO | B2 Min Score: 3
+2026-01-19 18:51:34,261 | INFO | ================================================================================
+2026-01-19 18:51:34,262 | INFO | Starting main execution loop...
+2026-01-19 18:51:34,370 | INFO | Market closed. Sleeping for 5 minutes...
+2026-01-19 18:56:34,372 | INFO | Market closed. Sleeping for 5 minutes...
+2026-01-19 19:01:34,375 | INFO | Market closed. Sleeping for 5 minutes...
+2026-01-19 19:01:39,220 | INFO | Bot stopped by user (Ctrl+C)
+2026-01-19 19:02:51,224 | INFO | Configuration loaded from config_dual.json
+2026-01-19 19:02:51,225 | INFO | Configuration validation passed

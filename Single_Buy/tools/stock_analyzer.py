@@ -8,7 +8,7 @@ from datetime import datetime, timedelta
 
 def main():
     # Connect to database
-    conn = sqlite3.connect('positions.db')
+    conn = sqlite3.connect('db/positions.db')
     cursor = conn.cursor()
 
     # Get today's signals (last 24 hours)

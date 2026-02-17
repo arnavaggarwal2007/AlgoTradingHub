@@ -114,7 +114,7 @@ console_handler.setFormatter(console_formatter)
 logger.addHandler(console_handler)
 
 # File handler with JSON format for compliance
-file_handler = logging.FileHandler('rajat_alpha_v67.log')
+file_handler = logging.FileHandler('logs/rajat_alpha_v67.log')
 json_formatter = ComplianceJSONFormatter(
     '%(timestamp)s %(level)s %(logger)s %(module)s %(function)s %(line)s %(message)s'
 )
@@ -122,7 +122,7 @@ file_handler.setFormatter(json_formatter)
 logger.addHandler(file_handler)
 
 # Separate audit log for critical events
-audit_handler = logging.FileHandler('audit.log')
+audit_handler = logging.FileHandler('logs/audit.log')
 audit_handler.setLevel(logging.WARNING)  # Only warnings and above
 audit_handler.setFormatter(json_formatter)
 logger.addHandler(audit_handler)
@@ -140,7 +140,7 @@ class PositionDatabase:
     - TES (Time Exit Signal) monitoring
     """
     
-    def __init__(self, db_path='positions.db'):
+    def __init__(self, db_path='db/positions.db'):
         self.conn = sqlite3.connect(db_path, check_same_thread=False)
         self.create_tables()
     
@@ -230,6 +230,16 @@ class PositionDatabase:
         
         columns = [desc[0] for desc in cursor.description]
         return [dict(zip(columns, row)) for row in cursor.fetchall()]
+    
+    def get_position_by_id(self, position_id: int) -> Optional[Dict]:
+        """Get a specific position by ID"""
+        cursor = self.conn.cursor()
+        cursor.execute('SELECT * FROM positions WHERE id = ?', (position_id,))
+        row = cursor.fetchone()
+        if row:
+            columns = [desc[0] for desc in cursor.description]
+            return dict(zip(columns, row))
+        return None
     
     def update_stop_loss(self, position_id: int, new_stop_loss: float):
         """Update trailing stop loss"""
@@ -1455,6 +1465,15 @@ class PositionManager:
         """Execute partial exit order"""
         symbol = position['symbol']
         
+        # CRITICAL SAFEGUARD: Check if we have enough shares to sell
+        if quantity > position['remaining_qty']:
+            logger.error(f"[{symbol}] Cannot execute partial exit - trying to sell {quantity} shares but only {position['remaining_qty']} remaining")
+            return
+        
+        if quantity <= 0:
+            logger.warning(f"[{symbol}] Cannot execute partial exit - invalid quantity {quantity}")
+            return
+        
         logger.info(f"[{symbol}] Executing Partial Exit {target_name}: {quantity} shares @ ${current_price:.2f}")
         
         try:
@@ -1485,6 +1504,11 @@ class PositionManager:
         """Execute full position exit (FIFO)"""
         symbol = position['symbol']
         remaining_qty = position['remaining_qty']
+        
+        # CRITICAL SAFEGUARD: Check if position still has shares to sell
+        if remaining_qty <= 0:
+            logger.warning(f"[{symbol}] Cannot execute full exit - position already fully exited (remaining_qty={remaining_qty})")
+            return
         
         logger.info(f"[{symbol}] Executing FULL EXIT: {remaining_qty} shares @ ${current_price:.2f} (Reason: {reason})")
         
@@ -1917,10 +1941,18 @@ class RajatAlphaTradingBot:
             
             # 4. Check Partial Profit Targets
             partial_exits = self.position_manager.check_partial_exit_targets(position, current_price)
-            for target_name, quantity, target_price in partial_exits:
-                self.position_manager.execute_partial_exit(
-                    position, target_name, quantity, current_price
-                )
+            if partial_exits:
+                for target_name, quantity, target_price in partial_exits:
+                    self.position_manager.execute_partial_exit(
+                        position, target_name, quantity, current_price
+                    )
+                
+                # CRITICAL FIX: Reload position after partial exits to get updated remaining_qty
+                # This prevents overselling if stop loss or other exits trigger in next iteration
+                refreshed_position = self.db.get_position_by_id(position['id'])
+                if refreshed_position and refreshed_position['remaining_qty'] == 0:
+                    logger.info(f"[{symbol}] Position fully exited via partial exits")
+                    continue
     
     def run_buy_hunter(self):
         """

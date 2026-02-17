@@ -1,7 +1,7 @@
 import sqlite3
 
 # Test the signals API logic directly (since Flask server may not be running)
-conn = sqlite3.connect('../../positions.db')
+conn = sqlite3.connect('../../db/positions.db')
 cursor = conn.cursor()
 
 # Test the same query used by the API

@@ -33,7 +33,7 @@ except ImportError:
 app = Flask(__name__)
 
 # Database path
-DB_PATH = os.path.join(os.path.dirname(__file__), '..', '..', 'positions.db')
+DB_PATH = os.path.join(os.path.dirname(__file__), '..', '..', 'db', 'positions.db')
 
 def get_db_connection():
     """Get database connection"""

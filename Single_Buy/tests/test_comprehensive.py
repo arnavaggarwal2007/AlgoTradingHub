@@ -1,5 +1,7 @@
 import sys
-sys.path.insert(0, '.')
+import os
+# Add parent directory to path to import the bot module
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from rajat_alpha_v67_single import PositionManager, ConfigManager, PositionDatabase
 import logging
 
@@ -42,7 +44,7 @@ def test_capital_conservation_mode():
 
         original_get_open_positions = db.get_open_positions
 
-        def mock_get_open_positions():
+        def mock_get_open_positions(symbol=None):
             # Return positions that total $40k (40% utilization)
             return [
                 {'symbol': 'MOCK1', 'entry_price': 100.0, 'remaining_qty': 200, 'stop_loss': 90.0},  # $20k
@@ -97,7 +99,7 @@ def test_utilization_limits():
         # Now test with utilization that would exceed limit
         original_get_open_positions = db.get_open_positions
 
-        def mock_high_util_positions():
+        def mock_high_util_positions(symbol=None):
             # Return positions that total $45k (45% utilization)
             # A $10k trade would bring total to 55% - should be blocked
             return [

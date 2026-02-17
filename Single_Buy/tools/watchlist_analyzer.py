@@ -4,7 +4,8 @@ Comprehensive analysis of all stocks in watchlist.txt
 """
 import sys
 import os
-sys.path.append(os.path.dirname(os.path.abspath(__file__)))
+# Add parent directory to path to import the bot module
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from rajat_alpha_v67_single import RajatAlphaTradingBot
 import json

@@ -2,8 +2,8 @@ from alpaca.trading.client import TradingClient
 import json
 
 # REPLACE THESE WITH YOUR KEYS
-API_KEY = "PKUWEJLYI5NDIIYIXFHMH4SHGT"
-SECRET_KEY = "jsbDo612oHJqvvUQBSBJcde2zbfmxLQy9c12oKqqTz9"
+API_KEY = "PKXP3QE2EM5EHCFSBF7K27VENG"
+SECRET_KEY = "NBcjFcXmEks8kpDwm81Srf6mWQSszU4aB3qxgz54UH6"
 
 # Connect to Paper Trading
 try:

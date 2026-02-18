@@ -1,14 +1,14 @@
 {
   "api": {
-    "key_id": "PKUWEJLYI5NDIIYIXFHMH4SHGT",
-    "secret_key": "jsbDo612oHJqvvUQBSBJcde2zbfmxLQy9c12oKqqTz9",
+    "key_id": "PKXP3QE2EM5EHCFSBF7K27VENG",
+    "secret_key": "NBcjFcXmEks8kpDwm81Srf6mWQSszU4aB3qxgz54UH6",
     "base_url": "https://paper-api.alpaca.markets"
   },
   "trading_rules": {
     "max_open_positions": 15,
     "max_trades_per_stock": 2,
     "max_trades_per_day": 3,
-    "min_signal_score": 2,
+    "min_signal_score": 4,
     "prevent_same_day_reentry": true,
     "watchlist_file": "config/watchlist.txt",
     "exclusion_file": "config/exclusionlist.txt",
@@ -29,11 +29,11 @@
     "mode": "percent_equity",
     "percent_of_equity": 0.03,
     "fixed_amount": 5000,
-    "base_amount": 50000,
+    "base_amount": 100000,
     "percent_of_amount": 0.03
   },
   "strategy_params": {
-    "min_signal_score": 2,
+    "min_signal_score": 4,
     "min_listing_days": 200,
     "sma_fast": 50,
     "sma_slow": 200,
@@ -44,7 +44,7 @@
     "stalling_days_short": 3,
     "stalling_range_pct": 5.0,
     "enable_extended_filter": true,
-    "max_gap_pct": 0.05,
+    "max_gap_pct": 0.04,
     "lookback_for_gap": 1,
     "ma_touch_threshold_pct": 0.025,
     "ema_tolerance_pct": 0.025,
@@ -81,10 +81,10 @@
     "target_3_qty": 0.334
   },
   "execution_schedule": {
-    "buy_window_start_time": "13:00",
+    "buy_window_start_time": "14:30",
     "buy_window_end_time": "15:59",
     "enable_smart_execution": false,
-    "signal_monitoring_minutes": 15,
+    "signal_monitoring_minutes": 30,
     "top_n_trades": 5,
     "default_interval_seconds": 120,
     "last_hour_interval_seconds": 60

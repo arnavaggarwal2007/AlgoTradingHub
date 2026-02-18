@@ -1096,6 +1096,7 @@ class RajatAlphaAnalyzer:
             'reason': '',
             'score': 0,
             'pattern': 'None',
+            'signal_types': [],
             'price': 0,
             'checks': {}
         }
@@ -1165,18 +1166,28 @@ class RajatAlphaAnalyzer:
             logger.info(f"[{symbol}] ❌ Signal Check: FAILED - No pattern (Engulfing/Piercing/Tweezer) OR touch signal detected")
             return False, result
         else:
-            signal_description = f"Pattern: {pattern_name}" if pattern_found else f"Touch Signal: {touch_signal_type}"
+            detected_parts = []
+            if pattern_found:
+                detected_parts.append(f"Pattern: {pattern_name}")
+            if touch_signal_found:
+                detected_parts.append(f"Touch: {touch_signal_type}")
+            signal_description = " + ".join(detected_parts)
             logger.info(f"[{symbol}] ✅ Signal Check: PASSED - {signal_description} detected")
         
-        # Set standardized pattern names for filtering
+        # Set ALL applicable signal types - a signal can qualify for multiple types simultaneously
+        # e.g. a stock with Engulfing pattern + EMA21 touch qualifies as BOTH 'swing' and '21Touch'
+        signal_types = []
+        if pattern_found:
+            signal_types.append('swing')
         if touch_signal_found:
             if touch_signal_type == "EMA21_Touch":
-                result['pattern'] = "21Touch"
+                signal_types.append('21Touch')
             elif touch_signal_type == "SMA50_Touch":
-                result['pattern'] = "50Touch"
-        elif pattern_found:
-            result['pattern'] = "swing"
-        
+                signal_types.append('50Touch')
+
+        result['signal_types'] = signal_types
+        result['pattern'] = '+'.join(signal_types) if signal_types else 'None'
+
         # CHECK 5: Stalling Filter (apply to BOTH swing and touch signals)
         # Use touch-specific stalling parameters for touch signals
         if touch_signal_found:
@@ -1248,12 +1259,15 @@ class RajatAlphaAnalyzer:
         
         # ALL CHECKS PASSED
         result['signal'] = True
-        signal_description = f"Pattern: {pattern_name}" if pattern_found else f"Touch: {touch_signal_type}"
-        result['reason'] = f"VALID BUY SIGNAL - Score: {score}/5, {signal_description}"
+        signal_description = " + ".join(
+            ([f"Pattern:{pattern_name}"] if pattern_found else []) +
+            ([f"Touch:{touch_signal_type}"] if touch_signal_found else [])
+        )
+        result['reason'] = f"VALID BUY SIGNAL - Types:{'+'.join(result['signal_types'])} Score:{score}/5, {signal_description}"
         
-        logger.info(f"[{symbol}] 🎯 VALID BUY SIGNAL DETECTED!", extra={'symbol': symbol, 'score': score, 'pattern': result['pattern']})
+        logger.info(f"[{symbol}] 🎯 VALID BUY SIGNAL DETECTED! Types: {result['signal_types']}", extra={'symbol': symbol, 'score': score, 'pattern': result['pattern']})
         logger.info(f"[{symbol}]   Score: {score:.1f}/5 | {signal_description} | Price: ${current_price:.2f}", extra={'symbol': symbol})
-        logger.info(f"[{symbol}]   Touch Bonuses: EMA21({self.touch_ema21_count > 0}) SMA50({self.touch_sma50_count > 0})", extra={'symbol': symbol})
+        logger.info(f"[{symbol}]   Touch Bonuses: EMA21 count={self.touch_ema21_count}, SMA50 count={self.touch_sma50_count}", extra={'symbol': symbol})
         return True, result
 
 # ================================================================================
@@ -1665,8 +1679,8 @@ class SignalQueue:
 
                 # Preference 2: First 21EMA touch with specific patterns
                 ema21_touch = analyzer.touch_ema21_count > 0
-                pattern_type = signal_details.get('pattern', '')
-                has_required_pattern = pattern_type == 'swing'  # swing signals are pattern-based (Engulfing, Piercing, Tweezer)
+                signal_types = signal_details.get('signal_types', [signal_details.get('pattern', '')])
+                has_required_pattern = 'swing' in signal_types  # swing signals are pattern-based (Engulfing, Piercing, Tweezer)
 
                 if ema21_touch and has_required_pattern:
                     # Check if current candle is explosive (>40% body)
@@ -2003,13 +2017,16 @@ class RajatAlphaTradingBot:
                 self.db.log_signal(symbol, signal_details, False)
 
                 if signal_valid:
-                    # Check pattern flags for signal filtering
-                    pattern = signal_details.get('pattern', '')
+                    # Check if at least one of the signal's applicable types is enabled
+                    # A signal can qualify for multiple types (e.g. swing+21Touch)
+                    # It executes if ANY of its types is enabled
+                    signal_types = signal_details.get('signal_types', [signal_details.get('pattern', '')])
                     enable_21touch = self.config.get('trading_rules', 'enable_21touch_signals', True)
                     enable_50touch = self.config.get('trading_rules', 'enable_50touch_signals', True)
                     enable_swing = self.config.get('trading_rules', 'enable_swing_signals', True)
-                    if (pattern == '21Touch' and not enable_21touch) or (pattern == '50Touch' and not enable_50touch) or (pattern == 'swing' and not enable_swing):
-                        logger.info(f"[{symbol}] Signal filtered out due to disabled signal type (pattern: {pattern})")
+                    enabled_map = {'swing': enable_swing, '21Touch': enable_21touch, '50Touch': enable_50touch}
+                    if not any(enabled_map.get(st, False) for st in signal_types):
+                        logger.info(f"[{symbol}] Signal filtered out - none of its signal types {signal_types} are enabled")
                         continue
                     
                     # Add to queue instead of executing immediately

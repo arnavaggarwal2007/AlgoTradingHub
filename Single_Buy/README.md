@@ -6,7 +6,7 @@ Rajat Alpha v67 is a sophisticated algorithmic trading bot implementing a single
 
 **Current Status:** ✅ Production Ready (Paper Trading Mode)  
 **Version:** 1.0  
-**Last Updated:** February 16, 2026
+**Last Updated:** February 18, 2026
 
 ## 🎯 Key Features
 
@@ -270,11 +270,18 @@ Key sections:
 #### Trading Rules
 ```json
 "trading_rules": {
-  "max_open_positions": 10,
-  "max_trades_per_stock": 2,
-  "max_trades_per_day": 3,
-  "min_signal_score": 2,
-  "prevent_same_day_reentry": true
+  "max_open_positions": 15,          // Max simultaneous open positions
+  "max_trades_per_stock": 2,         // Max open positions per symbol
+  "max_trades_per_day": 3,           // Max new trades per day
+  "min_signal_score": 4,             // Minimum score to execute a trade
+  "prevent_same_day_reentry": true,  // Block re-entry on same-day closed symbol
+  "per_trade_pct": 0.03,             // Capital per trade (3% of equity)
+  "max_allocation_per_stock_pct": 0.06, // Max capital per symbol (6%)
+  "max_equity_utilization_pct": 0.9, // Max total capital deployed (90%)
+  "enable_swing_signals": true,      // Enable Engulfing/Piercing/Tweezer entries
+  "enable_21touch_signals": true,    // Enable EMA21 touch-based entries
+  "enable_50touch_signals": false,   // Enable SMA50 touch-based entries
+  "portfolio_mode": "watchlist_only" // "watchlist_only" or "specific_stocks"
 }
 ```
 
@@ -289,11 +296,23 @@ Key sections:
 #### Strategy Parameters
 ```json
 "strategy_params": {
-  "min_listing_days": 200,
-  "sma_fast": 50,
-  "sma_slow": 200,
-  "ema_trend": 21,
-  "ma_touch_threshold_pct": 0.025
+  "min_listing_days": 200,           // Stock must have 200+ days of history
+  "sma_fast": 50,                    // Fast SMA period
+  "sma_slow": 200,                   // Slow SMA period
+  "ema_trend": 21,                   // EMA trend period
+  "ma_touch_threshold_pct": 0.025,   // Within 2.5% = "touching" the MA
+  "ema_tolerance_pct": 0.025,        // EMA21 can be 2.5% below SMA50
+  "pullback_days": 4,                // Lookback for recent high (pullback check)
+  "stalling_days_long": 8,           // Swing: long-term stalling window
+  "stalling_days_short": 3,          // Swing: short-term consolidation window
+  "stalling_range_pct": 5.0,         // Max range % to qualify as stalling
+  "enable_extended_filter": true,    // Block stocks gapped >max_gap_pct
+  "max_gap_pct": 0.04,               // Max allowed gap from previous close (4%)
+  "touch_min_stay_days": 5,          // Days price must stay near MA for touch signal
+  "touch_lookback_months": 2,        // How far back to look for touch events
+  "touch_min_body_pct": 0.4,         // Green candle body must be >40% of range
+  "touch_stalling_days_long": 3,     // Touch: long-term stalling window
+  "touch_stalling_days_short": 1     // Touch: short-term stalling window
 }
 ```
 
@@ -351,42 +370,86 @@ MSFT
 
 ## 📊 Strategy Overview
 
+### Three Signal Types
+
+The bot detects three independent signal types. **Each works standalone, and any combination can be enabled simultaneously.** A single stock can qualify for multiple types at once.
+
+| Signal Type | Config Flag | How it triggers | Bonus Score |
+|---|---|---|---|
+| **swing** | `enable_swing_signals` | Engulfing / Piercing / Tweezer candle pattern on pullback | none (pattern confirms conviction) |
+| **21Touch** | `enable_21touch_signals` | Price touches EMA21 for ≥ `touch_min_stay_days` then green candle | +1.0 (1st touch), +0.5 (2nd), +0 (3rd+) |
+| **50Touch** | `enable_50touch_signals` | Price touches SMA50 for ≥ `touch_min_stay_days` then green candle | +1.0 (1st touch), +0.5 (2nd), +0 (3rd+) |
+
+**Execution rule:** A signal passes the type filter if **at least one of its applicable types is enabled**. A stock with both Engulfing pattern and EMA21 touch qualifies as `swing+21Touch` — it executes if either `enable_swing_signals` OR `enable_21touch_signals` is `true`.
+
+**Additional +1.0 bonus** is added when a touch signal ALSO has a bullish pattern (e.g. `swing+21Touch` combined signal).
+
+### Enable/Disable Examples
+
+```json
+// Only swing trades (classic pattern entries)
+"enable_swing_signals": true,
+"enable_21touch_signals": false,
+"enable_50touch_signals": false
+
+// Only touch-based entries
+"enable_swing_signals": false,
+"enable_21touch_signals": true,
+"enable_50touch_signals": true
+
+// All three types (maximum opportunity)
+"enable_swing_signals": true,
+"enable_21touch_signals": true,
+"enable_50touch_signals": true
+```
+
 ### Entry Requirements (ALL must be TRUE)
 
-1. **Market Structure**: 50 SMA > 200 SMA AND 21 EMA ≥ 50 SMA * (1 - tolerance)
-2. **Pullback Detection**: Price within 2.5% of 21 EMA or 50 SMA
-3. **Signal Confirmation**: Explosive pattern (Engulfing/Piercing/Tweezer) OR touch signal
-4. **Multi-Timeframe**: Weekly close > Weekly EMA21 AND Monthly close > Monthly EMA10
-5. **Maturity Filter**: Stock traded ≥ 200 days
-6. **Volume Check**: Above 21-day average
+1. **Market Structure**: 50 SMA > 200 SMA AND 21 EMA ≥ 50 SMA × (1 − `ema_tolerance_pct`)
+2. **Multi-Timeframe**: Weekly close > Weekly EMA21 AND Monthly close > Monthly EMA10
+3. **Pullback Detection**: Price within `ma_touch_threshold_pct` (2.5%) of EMA21 or SMA50, with ≥ 2 of last 4 bars closing below EMA21
+4. **Signal Confirmation**: At least one enabled signal type must be detected (swing pattern OR 21Touch OR 50Touch)
+5. **Stalling Filter**: Not in sideways consolidation (long-term range ≤ `stalling_range_pct`)
+6. **Extended Filter**: Gap-up from previous close must be ≤ `max_gap_pct` (4%)
 7. **Green Candle**: Current price > previous close
-8. **Scoring**: Minimum score threshold (default: 2.0)
+8. **Maturity Filter**: Stock traded ≥ `min_listing_days` (200 days)
+9. **Minimum Score**: Final score ≥ `min_signal_score` (configured in `trading_rules`)
 
 ### Exit Management
 
-- **Dynamic Trailing Stop**: 17% → 9% @ +5% profit → 1% @ +10% profit
-- **Partial Exits**: 33.3% @ +10%, 33.3% @ +15%, 33.4% @ +20%
-- **Time Exit Signal**: Maximum hold period (default: 21 days)
-- **Stop Loss Mode**: Closing basis (recommended)
+- **Dynamic Trailing Stop**: 17% → 9% at +5% profit → 1% at +10% profit
+- **Partial Exits**: 33.3% at +10%, 33.3% at +15%, 33.4% at +20%
+- **Time Exit Signal**: Maximum `max_hold_days` (default: 21 days)
+- **Stop Loss Mode**: Closing basis
 
-### Scoring System (0-7 points)
+### Scoring System (0–7+ points)
 
-**Base Score (0-5):**
-1. RSI(14) > 50
-2. Weekly close > Weekly EMA21
-3. Monthly close > Monthly EMA10
-4. Volume > 21-day average
-5. Price within 3.5% above 21-day low
+**Base Score (0–5 points):**
+| Criterion | Points |
+|---|---|
+| RSI(14) > 50 | +1 |
+| Weekly close > Weekly EMA21 | +1 |
+| Monthly close > Monthly EMA10 | +1 |
+| Volume > 21-day SMA volume | +1 |
+| Price within 3.5% above 21-day low (demand zone) | +1 |
 
-**Bonus Points (0-2):**
-- EMA21 touch: +1.0
-- SMA50 touch: +1.0
+**Touch Bonus Points:**
+| Touch Event | Points |
+|---|---|
+| 1st EMA21 touch in current trend | +1.0 |
+| 2nd EMA21 touch in current trend | +0.5 |
+| 3rd+ EMA21 touch | +0 |
+| 1st SMA50 touch in current trend | +1.0 |
+| 2nd SMA50 touch in current trend | +0.5 |
+| 3rd+ SMA50 touch | +0 |
+| Both touch signal AND pattern on same stock | +1.0 |
 
-**Signal Quality:**
-- 0-2: Poor (avoid)
-- 3-4: Moderate (acceptable)
-- 5-6: High (preferred)
-- 6-7: Exceptional (optimal)
+**Score Interpretation:**
+- 3–4: Moderate — meets minimum threshold
+- 5–6: High — preferred entry quality
+- 6–7+: Exceptional — optimal setup
+
+> Touch bonuses are added **universally regardless of signal type**. A swing signal on a stock with EMA21 touch count still earns the touch bonus.
 
 ## 💾 Database Schema
 
@@ -518,6 +581,15 @@ Features:
 5. **Start Small**: When switching to live trading, start with small position sizes and monitor closely.
 
 ## 📝 Change Log
+
+### Version 1.1 (February 18, 2026)
+- ✅ **Signal type system redesigned**: swing, 21Touch, 50Touch each independently configurable
+- ✅ **Multi-type classification**: a signal can qualify as more than one type simultaneously (e.g. `swing+21Touch`)
+- ✅ **Filter logic fixed**: signal executes if ANY of its applicable types is enabled (not just the one type)
+- ✅ **Scoring universal**: touch bonuses (EMA21/SMA50) apply to ALL signal types, not just touch entries
+- ✅ **Log improvements**: VALID BUY SIGNAL now logs all qualifying types and exact touch counts
+- ✅ **Bug fix**: `signal_types` initialized in result dict on all code paths
+- ✅ **Config fix**: `enable_21touch_signals` corrected to `true`
 
 ### Version 1.0 (February 16, 2026)
 - ✅ Complete project reorganization

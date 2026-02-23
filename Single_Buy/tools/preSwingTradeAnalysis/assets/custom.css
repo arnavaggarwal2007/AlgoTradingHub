@@ -1,0 +1,390 @@
+/* assets/custom.css — Dark institutional theme for the swing-trade dashboard
+   Targets: dash-bootstrap-components (Cyborg) + dash-ag-grid
+   ─────────────────────────────────────────────────────────────────────────── */
+
+/* ── CSS Variables ──────────────────────────────────────────────────────────── */
+:root {
+  --bg-primary:      #0a0e1a;
+  --bg-card:         #111827;
+  --bg-card-hover:   #1a2340;
+  --bg-grid:         #0d1117;
+  --text-main:       #e8ecf4;
+  --text-dim:        #8896ac;
+  --accent:          #00d4ff;
+  --border:          #1e2d45;
+  --radius:          6px;
+  --shadow:          0 2px 12px rgba(0,0,0,0.45);
+}
+
+/* ── Reset / Base ───────────────────────────────────────────────────────────── */
+body, .dash-application, html {
+  background-color: var(--bg-primary) !important;
+  color: var(--text-main);
+  font-family: 'Inter', 'Segoe UI', 'SF Pro Display', system-ui, -apple-system, sans-serif;
+  font-size: 13px;
+}
+
+/* ── Navbar ─────────────────────────────────────────────────────────────────── */
+.dash-navbar {
+  background: #060a14 !important;
+  border-bottom: 1px solid var(--border);
+  padding: 8px 20px;
+}
+
+.navbar-brand {
+  color: var(--accent) !important;
+  font-weight: 700;
+  font-size: 16px;
+  letter-spacing: 0.3px;
+}
+
+/* ── Overview Cards ─────────────────────────────────────────────────────────── */
+.overview-card {
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 12px 16px;
+  box-shadow: var(--shadow);
+  transition: transform 0.15s;
+}
+.overview-card:hover { transform: translateY(-2px); }
+
+.overview-card .card-label {
+  font-size: 11px;
+  color: var(--text-dim);
+  text-transform: uppercase;
+  letter-spacing: 0.8px;
+}
+.overview-card .card-value {
+  font-size: 22px;
+  font-weight: 700;
+  margin: 2px 0 0;
+  line-height: 1.2;
+}
+.overview-card .card-subtext {
+  font-size: 11px;
+  color: var(--text-dim);
+}
+
+/* ── Filter Bar ─────────────────────────────────────────────────────────────── */
+.filter-bar {
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 10px 16px;
+  margin-bottom: 12px;
+}
+
+/* ── AG Grid Theme Override ─────────────────────────────────────────────────── */
+.ag-theme-alpine-dark {
+  --ag-background-color:            #0d1117;
+  --ag-foreground-color:            #e8ecf4;
+  --ag-header-background-color:     #060a14;
+  --ag-header-foreground-color:     #8896ac;
+  --ag-row-hover-color:             rgba(0,212,255,0.06);
+  --ag-selected-row-background-color: rgba(0,212,255,0.12);
+  --ag-border-color:                #1e2d45;
+  --ag-cell-horizontal-border:      solid #1e2d45;
+  --ag-header-column-separator-color: #1e2d45;
+  --ag-odd-row-background-color:    #0a0e1a;
+  --ag-font-size:                   12px;
+  --ag-font-family:                 'Inter', 'Segoe UI', system-ui;
+  --ag-row-height:                  34px;
+  --ag-header-height:               36px;
+  --ag-cell-horizontal-padding:     10px;
+}
+
+.ag-theme-alpine-dark .ag-header-cell-text {
+  font-weight: 600;
+  font-size: 11px;
+  letter-spacing: 0.4px;
+  text-transform: uppercase;
+}
+
+.ag-theme-alpine-dark .ag-cell {
+  border-right: 1px solid rgba(30,45,69,0.5);
+}
+
+.ag-theme-alpine-dark .ag-row-selected {
+  background-color: rgba(0,212,255,0.10) !important;
+}
+
+.ag-theme-alpine-dark .ag-paging-panel {
+  border-top: 1px solid var(--border);
+  font-size: 11px;
+  color: var(--text-dim);
+}
+
+/* ── Stock Detail Panel ─────────────────────────────────────────────────────── */
+.detail-panel {
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 12px;
+  min-height: 560px;
+}
+
+.detail-panel .detail-header {
+  border-bottom: 1px solid var(--border);
+  padding-bottom: 8px;
+  margin-bottom: 10px;
+}
+
+.detail-panel .detail-symbol {
+  font-size: 20px;
+  font-weight: 700;
+  color: var(--accent);
+}
+
+.detail-panel .detail-name {
+  font-size: 12px;
+  color: var(--text-dim);
+}
+
+/* ── News Feed ──────────────────────────────────────────────────────────────── */
+.news-feed {
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 10px 16px;
+  margin-top: 12px;
+  max-height: 340px;
+  overflow-y: auto;
+}
+
+.news-item {
+  padding: 6px 0;
+  border-bottom: 1px solid rgba(30,45,69,0.5);
+  line-height: 1.4;
+}
+.news-item:last-child { border-bottom: none; }
+
+.news-item .news-title {
+  font-size: 12px;
+  color: var(--text-main);
+}
+.news-item .news-meta {
+  font-size: 10px;
+  color: var(--text-dim);
+}
+.news-item.positive .news-title { color: #00e676; }
+.news-item.negative .news-title { color: #ef5350; }
+
+/* ── Score Badge ────────────────────────────────────────────────────────────── */
+.score-badge {
+  display: inline-block;
+  border-radius: 3px;
+  padding: 1px 7px;
+  font-size: 11px;
+  font-weight: 700;
+}
+.score-a-plus { background: rgba(0,230,118,0.15); color: #00e676; }
+.score-a      { background: rgba(0,212,255,0.15); color: #00d4ff; }
+.score-b      { background: rgba(100,181,246,0.12); color: #64b5f6; }
+.score-c      { background: rgba(136,150,172,0.12); color: #8896ac; }
+.score-d      { background: rgba(239,83,80,0.12); color: #ef5350; }
+
+/* ── State Badges ───────────────────────────────────────────────────────────── */
+.state-strong-uptrend   { color: #00e676; font-weight: 700; }
+.state-uptrend          { color: #00d4ff; }
+.state-pullback         { color: #64b5f6; }
+.state-sideways         { color: #8896ac; }
+.state-choppy           { color: #ff9800; }
+.state-downtrend        { color: #ef5350; }
+.state-strong-downtrend { color: #b71c1c; font-weight: 700; }
+
+/* ── Buttons ────────────────────────────────────────────────────────────────── */
+.btn-refresh {
+  background: rgba(0,212,255,0.10);
+  border: 1px solid rgba(0,212,255,0.35);
+  color: var(--accent);
+  border-radius: var(--radius);
+  font-size: 12px;
+  font-weight: 600;
+  padding: 5px 14px;
+  transition: all 0.2s;
+}
+.btn-refresh:hover {
+  background: rgba(0,212,255,0.20);
+  color: var(--accent);
+  border-color: var(--accent);
+}
+
+.btn-help {
+  background: transparent;
+  border: 1px solid var(--border);
+  color: var(--text-dim);
+  border-radius: var(--radius);
+  font-size: 12px;
+  padding: 5px 10px;
+}
+
+/* ── Loading Spinner ────────────────────────────────────────────────────────── */
+.loading-spinner {
+  border: 2px solid rgba(0,212,255,0.2);
+  border-top: 2px solid var(--accent);
+  border-radius: 50%;
+  width: 18px;
+  height: 18px;
+  animation: spin 0.8s linear infinite;
+  display: inline-block;
+  vertical-align: middle;
+}
+@keyframes spin { to { transform: rotate(360deg); } }
+
+/* ── Tooltips ───────────────────────────────────────────────────────────────── */
+.custom-tooltip {
+  background: #1a2340 !important;
+  border: 1px solid var(--border) !important;
+  border-radius: 4px;
+  padding: 8px 12px;
+  font-size: 12px;
+  color: var(--text-main);
+  box-shadow: 0 4px 16px rgba(0,0,0,0.5);
+  max-width: 320px;
+}
+
+/* ── Help Modal ─────────────────────────────────────────────────────────────── */
+.modal-content {
+  background: #0d1117 !important;
+  border: 1px solid var(--border) !important;
+  color: var(--text-main);
+}
+.modal-header {
+  border-bottom: 1px solid var(--border) !important;
+  background: #060a14 !important;
+}
+.modal-body h6 {
+  color: var(--accent);
+  font-size: 12px;
+  text-transform: uppercase;
+  letter-spacing: 0.6px;
+  margin-top: 14px;
+}
+
+/* ── Dropdowns (DCC) ────────────────────────────────────────────────────────── */
+.Select-control, .Select-menu-outer {
+  background-color: #111827 !important;
+  border-color: var(--border) !important;
+  color: var(--text-main) !important;
+}
+.Select-value-label, .Select-placeholder {
+  color: var(--text-main) !important;
+}
+.VirtualizedSelectOption { background: #111827 !important; }
+.VirtualizedSelectFocusedOption { background: #1a2340 !important; }
+
+/* ── Range Slider ───────────────────────────────────────────────────────────── */
+.rc-slider-track   { background-color: var(--accent); }
+.rc-slider-handle  { border-color: var(--accent); background: var(--bg-card); }
+.rc-slider-rail    { background-color: var(--border); }
+
+/* ── Scrollbars ─────────────────────────────────────────────────────────────── */
+::-webkit-scrollbar       { width: 6px; height: 6px; }
+::-webkit-scrollbar-track { background: var(--bg-primary); }
+::-webkit-scrollbar-thumb { background: #1e2d45; border-radius: 3px; }
+::-webkit-scrollbar-thumb:hover { background: #2a3d5c; }
+
+/* ── Status Indicators ──────────────────────────────────────────────────────── */
+.watchlist-ok   { color: #00e676; }
+.watchlist-warn { color: #ff9800; }
+.last-refresh   { color: var(--text-dim); font-size: 11px; }
+
+/* ── Responsive helpers ─────────────────────────────────────────────────────── */
+.stat-label {
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.7px;
+  color: var(--text-dim);
+}
+.stat-value {
+  font-size: 15px;
+  font-weight: 700;
+  color: var(--text-main);
+}
+
+/* ════════════════════════════════════════════════════════════════════════════
+   THEME VARIANTS  (applied via body.theme-dim / body.theme-light)
+   Default dark theme is the base :root values above.
+   ════════════════════════════════════════════════════════════════════════════ */
+
+/* ── Dim Dark (slightly lighter backgrounds, higher contrast) ─────────────── */
+body.theme-dim {
+  --bg-primary:    #151c2b;
+  --bg-card:       #1c2537;
+  --bg-card-hover: #243047;
+  --bg-grid:       #131a27;
+  --text-main:     #edf1f9;
+  --text-dim:      #96a5bc;
+  --accent:        #29daff;
+  --border:        #253548;
+}
+body.theme-dim .ag-theme-alpine-dark {
+  --ag-background-color:             #1c2537;
+  --ag-header-background-color:      #111926;
+  --ag-odd-row-background-color:     #151c2b;
+  --ag-row-hover-color:              rgba(41,218,255,0.08);
+  --ag-selected-row-background-color:rgba(41,218,255,0.14);
+  --ag-border-color:                 #253548;
+  --ag-cell-horizontal-border:       solid #253548;
+}
+
+/* ── Light (full light theme) ─────────────────────────────────────────────── */
+body.theme-light {
+  --bg-primary:    #f0f4f9;
+  --bg-card:       #ffffff;
+  --bg-card-hover: #e8edf6;
+  --bg-grid:       #ffffff;
+  --text-main:     #1a2235;
+  --text-dim:      #5a6a82;
+  --accent:        #0059d4;
+  --border:        #c8d3e0;
+}
+body.theme-light,
+body.theme-light .dash-application {
+  background-color: #f0f4f9 !important;
+  color: #1a2235 !important;
+}
+body.theme-light .overview-card {
+  background: #ffffff;
+  border-color: #c8d3e0;
+  box-shadow: 0 1px 5px rgba(0,0,0,0.08);
+}
+body.theme-light .overview-card .card-label { color: #5a6a82; }
+body.theme-light .detail-panel,
+body.theme-light .news-feed,
+body.theme-light .filter-bar {
+  background: #ffffff;
+  border-color: #c8d3e0;
+}
+body.theme-light .modal-content  { background: #f8fafb !important; color: #1a2235; }
+body.theme-light .modal-header   { background: #edf1f7 !important; }
+body.theme-light .btn-refresh {
+  background: rgba(0,89,212,0.09);
+  border-color: rgba(0,89,212,0.35);
+  color: #0059d4;
+}
+body.theme-light .btn-refresh:hover {
+  background: rgba(0,89,212,0.18);
+  color: #0059d4;
+}
+body.theme-light .btn-help { border-color: #c8d3e0; color: #5a6a82; }
+/* AG Grid light overrides — keep class name, just override CSS vars */
+body.theme-light .ag-theme-alpine-dark {
+  --ag-background-color:              #ffffff;
+  --ag-foreground-color:              #1a2235;
+  --ag-header-background-color:       #f0f4f9;
+  --ag-header-foreground-color:       #5a6a82;
+  --ag-odd-row-background-color:      #f8fafc;
+  --ag-row-hover-color:               rgba(0,89,212,0.05);
+  --ag-selected-row-background-color: rgba(0,89,212,0.10);
+  --ag-border-color:                  #c8d3e0;
+  --ag-cell-horizontal-border:        solid #c8d3e0;
+  --ag-header-column-separator-color: #c8d3e0;
+}
+body.theme-light .ag-theme-alpine-dark .ag-header-cell-text { color: #5a6a82; }
+body.theme-light .ag-paging-panel { color: #5a6a82; }
+/* Scrollbars in light mode */
+body.theme-light ::-webkit-scrollbar-track { background: #f0f4f9; }
+body.theme-light ::-webkit-scrollbar-thumb { background: #c0ccda; }
+body.theme-light ::-webkit-scrollbar-thumb:hover { background: #a0b0c4; }

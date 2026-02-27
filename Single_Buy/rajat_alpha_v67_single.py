@@ -1682,16 +1682,19 @@ class SignalQueue:
                 signal_types = signal_details.get('signal_types', [signal_details.get('pattern', '')])
                 has_required_pattern = 'swing' in signal_types  # swing signals are pattern-based (Engulfing, Piercing, Tweezer)
 
+                # Calculate candle body metrics for preferences 2 and 3
+                body_size = abs(current_candle['close'] - current_candle['open'])
+                total_range = current_candle['high'] - current_candle['low']
+                is_explosive_candle = total_range > 0 and (body_size / total_range) > 0.40
+                pattern_name = signal_details.get('pattern', signal_details.get('touch_signal', 'Unknown'))
+
                 if ema21_touch and has_required_pattern:
-                    # Check if current candle is explosive (>40% body)
-                    body_size = abs(current_candle['close'] - current_candle['open'])
-                    total_range = current_candle['high'] - current_candle['low']
-                    if total_range > 0 and (body_size / total_range) > 0.40:
+                    if is_explosive_candle:
                         priority_score += 800  # Second highest
-                        logger.debug(f"[{symbol}] Tie-breaker +800: 21EMA touch + explosive pattern ({pattern_type})")
+                        logger.debug(f"[{symbol}] Tie-breaker +800: 21EMA touch + explosive pattern ({pattern_name})")
 
                 # Preference 3: Explosive current candle (>40% body)
-                elif total_range > 0 and (body_size / total_range) > 0.40:
+                elif is_explosive_candle:
                     priority_score += 600  # Third priority
                     logger.debug(f"[{symbol}] Tie-breaker +600: Explosive current candle ({body_size/total_range:.1%})")
 
@@ -1699,7 +1702,7 @@ class SignalQueue:
                 sma50_touch = analyzer.touch_sma50_count > 0
                 if sma50_touch and has_required_pattern:
                     priority_score += 400  # Fourth priority
-                    logger.debug(f"[{symbol}] Tie-breaker +400: 50SMA touch + pattern ({pattern_type})")
+                    logger.debug(f"[{symbol}] Tie-breaker +400: 50SMA touch + pattern ({pattern_name})")
 
                 # Preference 5: Touch signals with patterns in demand zone
                 # Check if current price is in demand zone (within 3.5% of 21-day low)
@@ -2017,6 +2020,13 @@ class RajatAlphaTradingBot:
                 self.db.log_signal(symbol, signal_details, False)
 
                 if signal_valid:
+                    # Per-stock limit check: don't collect signals beyond configured max positions per stock
+                    max_trades_per_stock = self.config.get('trading_rules', 'max_trades_per_stock')
+                    existing_positions = self.db.get_open_positions(symbol=symbol)
+                    if len(existing_positions) >= max_trades_per_stock:
+                        logger.info(f"[{symbol}] Max positions per stock reached ({len(existing_positions)}/{max_trades_per_stock}), skipping signal collection")
+                        continue
+
                     # Check if at least one of the signal's applicable types is enabled
                     # A signal can qualify for multiple types (e.g. swing+21Touch)
                     # It executes if ANY of its types is enabled
@@ -2098,7 +2108,6 @@ class RajatAlphaTradingBot:
             # Check per-stock limit
             symbol_positions = self.db.get_open_positions(symbol=symbol)
             max_trades_per_stock = self.config.get('trading_rules', 'max_trades_per_stock')
-
             if len(symbol_positions) >= max_trades_per_stock:
                 logger.info(f"[{symbol}] Max trades per stock reached ({len(symbol_positions)}/{max_trades_per_stock}), skipping")
                 continue

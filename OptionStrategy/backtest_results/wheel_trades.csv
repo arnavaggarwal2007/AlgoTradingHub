@@ -1,0 +1,2 @@
+entry_date,symbol,strike,dte,entry_premium,entry_spot,entry_vix,collateral,market_condition,exit_date,pnl,exit_reason
+2025-04-03T00:00:00,SPY,492.0,35,4.8169,532.06640625,30.020000457763672,49200.0,downtrend,2025-04-04T00:00:00,-1724.9500000000003,stop_loss

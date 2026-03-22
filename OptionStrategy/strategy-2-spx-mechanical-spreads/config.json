@@ -1,0 +1,51 @@
+{
+    "strategy": "spx_mechanical_spreads",
+    "version": "1.0",
+    
+    "underlying": "SPX",
+    "alternative_underlying": "XSP",
+    "use_alternative": false,
+    
+    "spread_rules": {
+        "entry_days": ["Monday", "Wednesday", "Friday"],
+        "entry_time_start": "10:00",
+        "entry_time_end": "15:00",
+        "target_delta": 0.12,
+        "delta_tolerance": 0.03,
+        "spread_width": 50,
+        "min_credit": 1.50,
+        "min_dte": 30,
+        "max_dte": 45,
+        "profit_target_pct": 0.50,
+        "stop_loss_multiplier": 3.0,
+        "time_exit_dte": 21
+    },
+    
+    "vix_rules": {
+        "min_vix": 15,
+        "max_vix": 35,
+        "pause_above": 40,
+        "aggressive_above": 20,
+        "reduce_delta_above": 25
+    },
+    
+    "risk": {
+        "max_concurrent_spreads": 6,
+        "max_risk_per_trade_pct": 0.05,
+        "max_portfolio_exposure_pct": 0.20,
+        "max_risk_per_trade_pct_of_equity": 0.05
+    },
+    
+    "execution": {
+        "use_mid_price": true,
+        "mid_price_increment": 0.05,
+        "mid_price_max_retries": 10,
+        "mid_price_retry_seconds": 30,
+        "scan_interval_minutes": 5
+    },
+
+    "logging": {
+        "level": "INFO",
+        "log_dir": "logs"
+    }
+}

@@ -1472,6 +1472,12 @@ class PositionManager:
                     qty_to_sell = int(position['quantity'] * target_qty_pct)
                     # Ensure we don't try to sell more than what's remaining
                     qty_to_sell = min(qty_to_sell, remaining_qty)
+                    
+                    # GUARD RAIL: If this is the last target (PT3), sell ALL remaining qty
+                    # to prevent qty from going negative due to rounding errors
+                    if target_name == 'PT3':
+                        qty_to_sell = remaining_qty
+                    
                     if qty_to_sell > 0:
                         exits_to_execute.append((target_name, qty_to_sell, target_price))
         

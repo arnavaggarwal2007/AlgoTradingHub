@@ -1468,7 +1468,10 @@ class PositionManager:
                 already_taken = cursor.fetchone()[0] > 0
                 
                 if not already_taken and remaining_qty > 0:
-                    qty_to_sell = int(remaining_qty * target_qty_pct)
+                    # FIX: Calculate 33% of ORIGINAL quantity, not remaining quantity
+                    qty_to_sell = int(position['quantity'] * target_qty_pct)
+                    # Ensure we don't try to sell more than what's remaining
+                    qty_to_sell = min(qty_to_sell, remaining_qty)
                     if qty_to_sell > 0:
                         exits_to_execute.append((target_name, qty_to_sell, target_price))
         

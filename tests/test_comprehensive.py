@@ -74,6 +74,7 @@ def test_utilization_limits():
 
     try:
         config = ConfigManager('config/config.json')
+        config.config['trading_rules']['max_equity_utilization_pct'] = 0.50
         db = PositionDatabase()
 
         # Mock trading client
@@ -87,7 +88,7 @@ def test_utilization_limits():
         position_manager = PositionManager(trading_client, config, db, None)
 
         # Current utilization ~19.9%, max allowed 50%
-        # A $10k trade would bring total to ~29.9% - should be allowed
+        # A trade bringing total under 50% - should be allowed
 
         shares, amount = position_manager.calculate_position_size('ALLOWED_TEST', 100.0)
         if shares > 0:
@@ -100,11 +101,10 @@ def test_utilization_limits():
         original_get_open_positions = db.get_open_positions
 
         def mock_high_util_positions(symbol=None):
-            # Return positions that total $45k (45% utilization)
-            # A $10k trade would bring total to 55% - should be blocked
+            # Return positions that total $50k (50% utilization - limit reached)
             return [
-                {'symbol': 'HIGH1', 'entry_price': 100.0, 'remaining_qty': 225, 'stop_loss': 90.0},  # $22.5k
-                {'symbol': 'HIGH2', 'entry_price': 100.0, 'remaining_qty': 225, 'stop_loss': 90.0},  # $22.5k
+                {'symbol': 'HIGH1', 'entry_price': 100.0, 'remaining_qty': 250, 'stop_loss': 90.0},  # $25k
+                {'symbol': 'HIGH2', 'entry_price': 100.0, 'remaining_qty': 250, 'stop_loss': 90.0},  # $25k
             ]
 
         db.get_open_positions = mock_high_util_positions

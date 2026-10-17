@@ -8,7 +8,9 @@
     "max_open_positions": 15,
     "max_trades_per_stock": 1,
     "max_trades_per_day": 3,
-    "min_signal_score": 4,
+    "min_signal_score": 4.0,
+    "min_touch_only_score": 5.0,
+    "require_bullish_confirmation_for_touch": true,
     "prevent_same_day_reentry": true,
     "watchlist_file": "config/watchlist.txt",
     "exclusion_file": "config/exclusionlist.txt",
@@ -22,8 +24,18 @@
     "max_allocation_per_stock_pct": 0.06,
     "per_trade_pct": 0.03,
     "enable_swing_signals": true,
-    "enable_21touch_signals": false,
-    "enable_50touch_signals": false
+    "enable_21touch_signals": true,
+    "enable_50touch_signals": true
+  },
+  "order_execution": {
+    "execution_mode": "smart_limit_ladder",
+    "stage_1_timeout_minutes": 10,
+    "stage_1_peg": "midpoint",
+    "stage_2_timeout_minutes": 15,
+    "stage_2_offset_cents": 0.02,
+    "stage_3_marketable_limit": true,
+    "market_close_cutoff_time": "15:55",
+    "resting_limit_for_profit_targets": true
   },
   "position_sizing": {
     "mode": "percent_equity",
@@ -32,8 +44,29 @@
     "base_amount": 100000,
     "percent_of_amount": 0.03
   },
+  "candle_quality": {
+    "enable_shooting_star_filter": true,
+    "max_upper_wick_ratio": 0.50,
+    "max_wick_to_body_ratio": 2.0
+  },
+  "pullback_validation": {
+    "enable_impulse_validation": true,
+    "min_impulse_extension_pct": 0.05,
+    "min_pullback_decline_pct": 0.03,
+    "min_consecutive_lower_closes": 3,
+    "impulse_lookback_bars": 20
+  },
+  "pattern_config": {
+    "enabled_patterns": {
+      "Engulfing": {"enable": true, "score_weight": 1.0, "tier": "A"},
+      "Piercing": {"enable": true, "score_weight": 1.0, "tier": "A"},
+      "Tweezer": {"enable": true, "score_weight": 0.8, "tier": "B"},
+      "Hammer": {"enable": true, "score_weight": 0.8, "tier": "B"},
+      "UpsideReversal": {"enable": true, "score_weight": 0.6, "tier": "C"}
+    }
+  },
   "strategy_params": {
-    "min_signal_score": 4,
+    "min_signal_score": 4.0,
     "min_listing_days": 200,
     "sma_fast": 50,
     "sma_slow": 200,
@@ -50,22 +83,41 @@
     "ema_tolerance_pct": 0.025,
     "touch_min_stay_days": 5,
     "touch_lookback_months": 2,
-    "touch_min_body_pct": 0.4,
+    "touch_min_body_pct": 0.40,
     "touch_stalling_days_long": 3,
-    "touch_stalling_days_short": 1
+    "touch_stalling_days_short": 1,
+    "bullish_confirmation_min_body_ratio": 0.50,
+    "bullish_confirmation_min_close_position": 0.67,
+    "sma50_touch_max_volume_ratio": 1.0,
+    "sma50_touch_min_wick_ratio": 0.35,
+    "sma50_touch_min_spacing_days": 15
   },
   "risk_management": {
-    "initial_stop_loss_pct": 0.17,
-    "tier_1_profit_pct": 0.05,
-    "tier_1_stop_loss_pct": 0.09,
-    "tier_2_profit_pct": 0.1,
-    "tier_2_stop_loss_pct": 0.01,
+    "stop_loss_mode": "hybrid_atr",
+    "stepper_mode": "user_fixed",
+    "atr_period": 14,
+    "atr_multiplier_default": 2.0,
+    "atr_multiplier_high_conviction": 1.5,
+    "atr_multiplier_low_conviction": 2.5,
+    "max_initial_sl_pct": 0.17,
+    "min_initial_sl_pct": 0.05,
+    "stepper_stage_1_gain": 0.05,
+    "stepper_stage_1_sl_pct": -0.04,
+    "stepper_stage_2_gain": 0.08,
+    "stepper_stage_2_sl_pct": 0.00,
+    "stepper_stage_3_gain": 0.10,
+    "stepper_stage_3_sl_pct": 0.03,
+    "trailing_ratchet_per_pct": 0.01,
+    "stop_loss_evaluation": "daily_close_confirmed",
     "max_hold_days": 21,
-    "stop_loss_mode": "closing_basis",
+    "enable_dynamic_tes_extension": true,
+    "tes_extension_days": 10,
+    "max_tes_extensions": 2,
+    "runner_exempt_from_tes": true,
     "max_loss_mode": "percent",
     "max_loss_pct": 0.02,
     "max_loss_dollars": 500,
-    "var_enabled": true,
+    "var_enabled": false,
     "var_confidence_level": 0.95,
     "var_time_horizon_days": 1,
     "var_method": "historical",
@@ -73,20 +125,70 @@
   },
   "profit_taking": {
     "enable_partial_exits": true,
-    "target_1_pct": 0.1,
-    "target_1_qty": 0.333,
-    "target_2_pct": 0.15,
-    "target_2_qty": 0.333,
-    "target_3_pct": 0.2,
-    "target_3_qty": 0.334
+    "target_1_pct": 0.05,
+    "target_1_qty": 0.20,
+    "target_2_pct": 0.10,
+    "target_2_qty": 0.25,
+    "target_3_pct": 0.15,
+    "target_3_qty": 0.25,
+    "runner_qty": 0.30,
+    "runner_exempt_from_tes": true
+  },
+  "first_hour_guard": {
+    "enable": true,
+    "guard_start_time": "09:30",
+    "guard_end_time": "10:30",
+    "index_symbol": "SPY",
+    "catastrophic_override_pct": -0.22,
+    "stock_gap_override_pct": -0.10,
+    "suppress_sl": true,
+    "suppress_tes": true,
+    "allow_profit_exits": true,
+    "allow_trailing_updates": true
+  },
+  "market_regime": {
+    "enable_index_gate": true,
+    "index_symbols": ["SPY", "QQQ"],
+    "index_above_sma50_required": true
+  },
+  "ma_slope_validation": {
+    "enable": true,
+    "mode": "regime_adaptive",
+    "bull_regime_enforce": false,
+    "choppy_regime_enforce": true,
+    "bear_regime_enforce": true,
+    "sma50_slope_days": 5,
+    "sma200_slope_days": 10,
+    "ema21_slope_days": 1,
+    "regime_index_symbol": "SPY"
+  },
+  "relative_strength": {
+    "enable": false,
+    "benchmark_symbol": "QQQ",
+    "rs_lookback_days": 21,
+    "min_rs_rating": 40.0,
+    "use_rs_in_scoring": true,
+    "rs_score_bonus_threshold": 70.0,
+    "rs_score_bonus_points": 0.5,
+    "weights": {
+      "price_rs": 0.25,
+      "volume_profile": 0.20,
+      "green_red_ratio": 0.15,
+      "week52_position": 0.15,
+      "weekly_momentum": 0.10,
+      "earnings_quality": 0.10,
+      "fund_ownership": 0.05
+    },
+    "earnings_data": {}
   },
   "execution_schedule": {
     "buy_window_start_time": "14:30",
     "buy_window_end_time": "15:59",
-    "enable_smart_execution": false,
+    "enable_smart_execution": true,
     "signal_monitoring_minutes": 30,
     "top_n_trades": 5,
     "default_interval_seconds": 120,
     "last_hour_interval_seconds": 60
-  }
+  },
+  "manual_position_overrides": []
 }

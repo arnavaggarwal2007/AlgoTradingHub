@@ -562,3 +562,4 @@ def build_pdf(filename="docs/Rajat_Alpha_v67_Executive_Summary.pdf"):
 
 if __name__ == "__main__":
     build_pdf("docs/Rajat_Alpha_v67_Executive_Summary.pdf")
+

@@ -259,6 +259,25 @@ def run_comparator():
         res['combined_log'].to_csv(filename, index=False)
         print(f"📁 Saved Config {idx} Log: {filename}")
 
+    # Export Master Multi-Tab Excel Spreadsheet (Tab 1: Comparison, Tabs 2-5: Config Trade Logs)
+    excel_path = "docs/rajat_alpha_4_configurations_simulation.xlsx"
+    sheet_names = [
+        "Config1_Standard",
+        "Config2_Conservative",
+        "Config3_Aggressive",
+        "Config4_PropSpec"
+    ]
+    with pd.ExcelWriter(excel_path, engine="openpyxl") as writer:
+        summary_df.to_excel(writer, sheet_name="Comparison_Summary", index=False)
+        for (name, res), sname in zip(results.items(), sheet_names):
+            clean_log = res['combined_log'].copy()
+            # Order columns intuitively
+            pref_cols = ['Execution Status', 'Symbol', 'Entry Date', 'Exit Date', 'Buy Price', 'Score', 'Return (%)', 'Allocated ($)', 'Realized PnL ($)']
+            rem_cols = [c for c in clean_log.columns if c not in pref_cols]
+            ordered_cols = [c for c in pref_cols if c in clean_log.columns] + rem_cols
+            clean_log[ordered_cols].to_excel(writer, sheet_name=sname, index=False)
+    print(f"📗 Saved Master Multi-Tab Excel Workbook: {excel_path} (5 Tabs)")
+
     # Plot 4 Comparative Curves Overlay
     plt.figure(figsize=(14, 7))
     colors = ['#10B981', '#3B82F6', '#F59E0B', '#8B5CF6']
@@ -278,3 +297,4 @@ def run_comparator():
 
 if __name__ == '__main__':
     run_comparator()
+

@@ -966,49 +966,65 @@ class RajatAlphaAnalyzer:
 
     def calculate_score(self, df: pd.DataFrame, symbol: str, weekly_ok: bool, 
                         monthly_ok: bool, pattern_found: bool, touch_found: bool,
-                        pattern_weight: float = 1.0, rs_score: float = 50.0) -> float:
-        """Computes comprehensive score across technicals, MTF, volume, touch, and RS"""
+                        pattern_weight: float = 1.0, rs_score: float = 50.0,
+                        in_demand_zone: bool = False) -> float:
+        """
+        Computes comprehensive score across technicals, MTF, volume, touch, and pattern.
+        Note: IBD RS is kept for informational logging, queue tie-break, and DB storage, 
+        and is NOT added to the numerical score calculation.
+        """
         curr = df.iloc[-1]
         score = 0.0
         
-        # 1. RSI Momentum (>50)
+        # 1. Pattern score weight (Engulfing: 1.0, Piercing: 1.0, Hammer: 0.8, Tweezer: 0.8, UpsideReversal: 0.6)
+        if pattern_found:
+            score += pattern_weight
+            
+        # 2. Weekly MTF confirmation
+        if weekly_ok: 
+            score += 1.0
+            
+        # 3. Demand Zone Proximity (within 3.5% of 21-day low)
+        low_21 = df['low'].iloc[-21:].min() if len(df) >= 21 else curr['low']
+        if in_demand_zone or (curr['low'] <= low_21 * 1.035):
+            score += 1.0
+            
+        # 4. RSI Momentum (>50)
         rsi_val = curr.get('RSI14')
         if not pd.isna(rsi_val) and rsi_val > 50:
             score += 1.0
             
-        # 2 & 3. MTF
-        if weekly_ok: score += 1.0
-        if monthly_ok: score += 1.0
+        # 5. Monthly MTF confirmation
+        if monthly_ok: 
+            score += 1.0
         
-        # 4. Volume above 21-day average
+        # 6. Volume above 21-day average
         if curr['volume'] > curr.get('VOL_SMA21', 0):
             score += 1.0
             
-        # 5. Demand Zone (within 3.5% of 21-day low)
-        low_21 = df['low'].iloc[-21:].min()
-        if curr['low'] <= (low_21 * 1.035):
-            score += 1.0
-            
-        # Pattern score weight
-        if pattern_found:
-            score += pattern_weight
-            
-        # Isolated Touch state bonuses
-        state = self.symbol_touch_state[symbol]
+        # 7. Isolated Touch state bonuses
+        state = self.symbol_touch_state.get(symbol, {'ema21_count': 0, 'sma50_count': 0})
         if state['ema21_count'] == 1: score += 1.0
         elif state['ema21_count'] == 2: score += 0.5
         
         if state['sma50_count'] == 1: score += 1.0
         elif state['sma50_count'] == 2: score += 0.5
-        
-        # RS composite bonus
-        if self.config.get('relative_strength', 'enable', False) and rs_score >= 70.0:
-            score += self.config.get('relative_strength', 'rs_score_bonus_points', 0.5)
             
         return round(score, 1)
 
     def analyze_entry_signal(self, symbol: str) -> Tuple[bool, Dict]:
-        """Full 7-gate entry signal analysis"""
+        """
+        Full Institutional Entry Signal Analysis with prioritized Gate Sequence:
+        GATE 0: Broad Market Regime Gate (SPY & QQQ > 50 SMA)
+        GATE 1: Market Structure (50 SMA > 200 SMA, 21 EMA >= 50 SMA - 2.5% tolerance)
+        GATE 1.5: Regime-Adaptive MA Slope
+        GATE 2: Preceding Impulse & Orderly Pullback Sequence
+        GATE 3: Reversal Candlestick Pattern OR Qualified Touch
+        GATE 4: Weekly Multi-Timeframe Confirmation (Close > Weekly EMA21)
+        GATE 5: Demand Zone Proximity Check
+        GATE 6: Stalling, Extension, Green Session & Shooting Star Rejection Filters
+        GATE 7: Comprehensive Scoring (out of 7.0) & Touch-Only Dual Gate
+        """
         result = {
             'symbol': symbol,
             'signal': False,
@@ -1050,40 +1066,46 @@ class RajatAlphaAnalyzer:
             result['reason'] = "50 SMA slope negative in non-bull regime"
             return False, result
 
-        # GATE 2: Multi-Timeframe Confirmation
-        weekly_ok, monthly_ok = self.check_multitimeframe_confirmation(df_daily, df_weekly, df_monthly)
-        result['checks']['weekly_ok'] = weekly_ok
-        result['checks']['monthly_ok'] = monthly_ok
-        if not (weekly_ok and monthly_ok):
-            result['reason'] = f"MTF failed (Weekly: {weekly_ok}, Monthly: {monthly_ok})"
-            return False, result
-
-        # GATE 3: Preceding Impulse & Orderly Retracement
+        # GATE 2: Preceding Impulse & Orderly Retracement (First criteria: valid pullback)
         pullback_ok = self.check_pullback(df_daily)
         result['checks']['pullback'] = pullback_ok
         if not pullback_ok:
             result['reason'] = "No valid preceding impulse and pullback sequence"
             return False, result
 
-        # GATE 4: Candlestick Pattern OR Touch Signal
+        # GATE 3: Candlestick Pattern OR Qualified Touch (Pattern formation after pullback)
         pattern_cfg = self.config.get('pattern_config', {})
         pat_found, pat_name, pat_tier, pat_weight = PatternDetector.has_pattern(df_daily, pattern_cfg)
         touch_found, touch_type = self.check_touch_based_signal(df_daily)
         
         if not (pat_found or touch_found):
-            result['reason'] = "No recognized reversal pattern or qualified touch"
+            result['reason'] = "No recognized reversal pattern or qualified touch after pullback"
             return False, result
 
         result['checks']['pattern'] = pat_found
         result['checks']['touch_signal'] = touch_found
         result['candle_pattern'] = pat_name
 
-        # GATE 5: Stalling Filter
+        # GATE 4: Weekly Multi-Timeframe Confirmation
+        weekly_ok, monthly_ok = self.check_multitimeframe_confirmation(df_daily, df_weekly, df_monthly)
+        result['checks']['weekly_ok'] = weekly_ok
+        result['checks']['monthly_ok'] = monthly_ok
+        if not weekly_ok:
+            result['reason'] = "Weekly MTF failed (Weekly Close <= Weekly EMA21)"
+            return False, result
+
+        # GATE 5: Demand Zone Proximity Check
+        curr_candle = df_daily.iloc[-1]
+        low_21 = df_daily['low'].iloc[-21:].min() if len(df_daily) >= 21 else curr_candle['low']
+        in_demand_zone = curr_candle['low'] <= (low_21 * 1.035)
+        result['checks']['demand_zone'] = in_demand_zone
+
+        # GATE 6: Stalling Filter
         if self.check_stalling(df_daily):
             result['reason'] = "Stock is in horizontal sideways consolidation"
             return False, result
 
-        # GATE 6: Extended Stock Filter (Gap > 4%)
+        # GATE 6.25: Extended Stock Filter (Gap > 4%)
         curr_price = self.data_fetcher.get_current_price(symbol)
         if curr_price is None:
             result['reason'] = "Unable to fetch live price"
@@ -1102,7 +1124,6 @@ class RajatAlphaAnalyzer:
             return False, result
 
         # GATE 6.75: Shooting Star Rejection Filter (MANDATORY)
-        curr_candle = df_daily.iloc[-1]
         max_wick = self.config.get('candle_quality', 'max_upper_wick_ratio', 0.50)
         max_w2b = self.config.get('candle_quality', 'max_wick_to_body_ratio', 2.0)
         if PatternDetector.is_shooting_star(curr_candle, max_wick, max_w2b):
@@ -1110,9 +1131,12 @@ class RajatAlphaAnalyzer:
             logger.info(f"[{symbol}] ❌ SHOOTING STAR REJECTED: Upper shadow spans >50% of range.")
             return False, result
 
-        # Calculate IBD Relative Strength
+        # Compute IBD Relative Strength Composite (0-100) — Informational & Tie-Breaker
         rs_score = self.calculate_rs_composite(symbol, df_daily)
         result['rs_score'] = rs_score
+        logger.info(f"[{symbol}] ℹ️ IBD RS Rating: {rs_score:.1f}/100 (Informational)")
+
+        # Optional Hard RS cutoff if explicitly configured
         if self.config.get('relative_strength', 'enable', False):
             min_rs = self.config.get('relative_strength', 'min_rs_rating', 40.0)
             if rs_score < min_rs:
@@ -1120,7 +1144,7 @@ class RajatAlphaAnalyzer:
                 return False, result
 
         # GATE 7: Scoring & Touch-Only Dual Gate
-        score = self.calculate_score(df_daily, symbol, weekly_ok, monthly_ok, pat_found, touch_found, pat_weight, rs_score)
+        score = self.calculate_score(df_daily, symbol, weekly_ok, monthly_ok, pat_found, touch_found, pat_weight, rs_score, in_demand_zone=in_demand_zone)
         result['score'] = score
         
         # Touch-Only Dual Gate: If no pattern, require higher score bar + bullish body
@@ -1155,6 +1179,7 @@ class RajatAlphaAnalyzer:
         result['pattern'] = '+'.join(signal_types) if signal_types else 'Touch-Only'
         result['price'] = curr_price
         result['reason'] = f"VALID BUY SIGNAL - Types:{result['pattern']} Score:{score:.1f} RS:{rs_score:.1f}"
+        logger.info(f"[{symbol}] 🎯 FULL CRITERIA MET: Pattern: {result['pattern']} | Score: {score:.1f}/7.0 | IBD RS: {rs_score:.1f}/100 (Informational) | Price: ${curr_price:.2f}")
         return True, result
 
 # ================================================================================
@@ -1569,8 +1594,9 @@ class SignalQueue:
             self.window_start_time = datetime.now()
         self.signals[symbol] = signal_details
     
-    def is_window_complete(self) -> bool:
+    def is_window_complete(self, force_cutoff: bool = False) -> bool:
         if not self.window_start_time: return False
+        if force_cutoff: return True
         elapsed = (datetime.now() - self.window_start_time).total_seconds() / 60
         return elapsed >= self.monitoring_minutes
     
@@ -1796,17 +1822,40 @@ class RajatAlphaTradingBot:
         """Scans watchlist during buy window and manages signal queue"""
         if not self.is_buy_window(): return
         
-        if self.signal_queue.is_window_complete():
+        is_closing = self.is_closing_window()
+        if self.signal_queue.is_window_complete(force_cutoff=is_closing):
             top_signals = self.signal_queue.get_top_signals(self.analyzer)
             open_positions = self.db.get_open_positions()
             max_positions = self.config.get('trading_rules', 'max_open_positions', 15)
-            avail = max(0, max_positions - len(open_positions))
+            pos_avail = max(0, max_positions - len(open_positions))
+            
+            # Enforce max_trades_per_day
+            trades_today = self.db.count_trades_today()
+            max_trades_per_day = self.config.get('trading_rules', 'max_trades_per_day', 3)
+            daily_remaining = max(0, max_trades_per_day - trades_today)
+            avail = min(pos_avail, daily_remaining)
+            
+            logger.info("=" * 80)
+            logger.info("🎯 BUY HUNTER EVALUATION & PORTFOLIO ALLOCATION")
+            logger.info(f"Daily Trades Executed: {trades_today}/{max_trades_per_day} | Open Positions: {len(open_positions)}/{max_positions} | Available Slots: {avail}")
+            
+            if top_signals:
+                logger.info("Ranked Candidates in Buy Window (Sorted by Score DESC, IBD RS DESC):")
+                for idx, (sym, det) in enumerate(top_signals, 1):
+                    selected = (idx <= avail)
+                    status_tag = "✅ SELECTED FOR POSITION" if selected else "⚠️ SKIPPED (Limit Reached)"
+                    logger.info(f"  {idx}. [{sym}] Score: {det.get('score')}/7.0 | IBD RS: {det.get('rs_score'):.1f} | Pattern: {det.get('pattern')} | Price: ${det.get('price'):.2f} -> {status_tag}")
+            else:
+                logger.info("No candidates maintained qualified status upon 30-min revalidation.")
+            logger.info("=" * 80)
             
             for symbol, details in top_signals[:avail]:
                 if self.config.get('trading_rules', 'prevent_same_day_reentry', True) and self.db.was_traded_today(symbol):
+                    logger.warning(f"[{symbol}] Skipped buy execution: Traded earlier today (prevent_same_day_reentry).")
                     continue
                 if self.position_manager.execute_buy(symbol, details):
                     self.db.log_signal(symbol, details, executed=True)
+                    logger.info(f"[{symbol}] 🚀 Order placed and position established in portfolio.")
                     
             self.signal_queue.reset()
             return
@@ -1821,7 +1870,7 @@ class RajatAlphaTradingBot:
             valid, details = self.analyzer.analyze_entry_signal(symbol)
             if valid:
                 self.signal_queue.add_signal(symbol, details)
-                logger.info(f"[{symbol}] Staged in Buy Queue: Score {details.get('score')}/5")
+                logger.info(f"[{symbol}] 📥 Staged in Buy Queue: Score {details.get('score')}/7.0 | IBD RS: {details.get('rs_score'):.1f} | Pattern: {details.get('pattern')}")
 
     def run(self):
         """Master execution loop"""

@@ -27,6 +27,12 @@ from typing import Dict, List, Tuple, Optional
 import pandas as pd
 import numpy as np
 
+if hasattr(sys.stdout, 'reconfigure'):
+    try:
+        sys.stdout.reconfigure(encoding='utf-8')
+    except Exception:
+        pass
+
 try:
     import yfinance as yf
 except ImportError:
@@ -34,10 +40,22 @@ except ImportError:
     os.system("pip install yfinance")
     import yfinance as yf
 
+try:
+    import matplotlib.pyplot as plt
+    import matplotlib.dates as mdates
+except ImportError:
+    print("Installing matplotlib...")
+    os.system("pip install matplotlib")
+    import matplotlib.pyplot as plt
+    import matplotlib.dates as mdates
+
 # ----------------------------------------------------------------------
-# 1. WATCHLIST DEFINITION (Institutional 94-Ticker Core + Benchmarks)
+# 1. WATCHLIST DEFINITION (Institutional Core + Benchmarks)
 # ----------------------------------------------------------------------
 DEFAULT_WATCHLIST = [
+    "AAPL", "NVDA", "MSFT", "AMZN", "META", "GOOGL", "TSLA", "CATY", "WSBC", "CLMT"
+]
+EXTENDED_WATCHLIST = [
     "AAPL", "MSFT", "NVDA", "AMZN", "GOOGL", "META", "TSLA", "AVGO", "COST", "AMD",
     "NFLX", "ADBE", "CRM", "QCOM", "TXN", "INTU", "AMAT", "BKNG", "ISRG", "LRCX",
     "MU", "PANW", "SNPS", "CDNS", "CRWD", "KLAC", "NXPI", "MELI", "MAR", "FTNT",
@@ -45,6 +63,31 @@ DEFAULT_WATCHLIST = [
     "DELL", "APP", "CRDO", "AXGN", "DUOL", "IOT", "MDB", "DDOG", "ZS", "NET"
 ]
 BENCHMARK_SYMBOLS = ["SPY", "QQQ"]
+
+def calculate_ibd_rs(df_slice: pd.DataFrame, qqq_slice: pd.DataFrame) -> float:
+    """Calculates 0-100 Relative Strength rating vs QQQ"""
+    if len(df_slice) < 22 or len(qqq_slice) < 22:
+        return 50.0
+    stock_ret = (df_slice['Close'].iloc[-1] - df_slice['Close'].iloc[-21]) / df_slice['Close'].iloc[-21]
+    qqq_ret = (qqq_slice['Close'].iloc[-1] - qqq_slice['Close'].iloc[-21]) / qqq_slice['Close'].iloc[-21]
+    alpha = (1.0 + stock_ret) / (1.0 + qqq_ret)
+    score_1 = max(0, min(100, (alpha - 0.90) / 0.30 * 100))
+    
+    slice_21 = df_slice.iloc[-21:]
+    up_vol = slice_21[slice_21['Close'] > slice_21['Open']]['Volume'].sum()
+    dn_vol = max(1, slice_21[slice_21['Close'] < slice_21['Open']]['Volume'].sum())
+    ud_ratio = up_vol / dn_vol
+    score_2 = max(0, min(100, (ud_ratio - 0.70) / 1.0 * 100))
+    
+    green_days = sum(slice_21['Close'] > slice_21['Open'])
+    red_days = max(1, sum(slice_21['Close'] < slice_21['Open']))
+    score_3 = max(0, min(100, (green_days / red_days - 0.60) / 0.80 * 100))
+    
+    high_252 = df_slice['High'].max()
+    dist_52 = (high_252 - df_slice['Close'].iloc[-1]) / high_252
+    score_4 = max(0, min(100, (1.0 - (dist_52 / 0.20)) * 100))
+    
+    return round((score_1 * 0.35) + (score_2 * 0.25) + (score_3 * 0.20) + (score_4 * 0.20), 1)
 
 # ----------------------------------------------------------------------
 # 2. INDICATOR & FEATURE CALCULATION ENGINE
@@ -150,7 +193,17 @@ def detect_candlestick_pattern(df_slice: pd.DataFrame) -> Tuple[bool, str, float
 # 4. SIGNAL GENERATOR (7 GATES)
 # ----------------------------------------------------------------------
 def evaluate_signal_v32(df: pd.DataFrame, i: int, qqq_df: pd.DataFrame) -> Tuple[bool, Dict]:
-    """Evaluates bar i for v3.2 Institutional criteria"""
+    """
+    Evaluates bar i for v3.2 Institutional criteria with restructured sequence:
+    1. Market Structure (SMA50 > SMA200, EMA21 >= SMA50 - 2.5%)
+    2. Valid Impulse & Pullback Sequence
+    3. Reversal Candlestick Pattern OR Qualified Touch
+    4. Weekly Confirmation (Weekly Close > Weekly EMA21)
+    5. Demand Zone Proximity Check
+    6. Stalling & Shooting Star Rejection Filters
+    7. IBD RS Calculation (Informational)
+    8. Scoring (out of 7.0) & Touch-Only Dual Gate
+    """
     if i < 200:
         return False, {}
         
@@ -165,52 +218,65 @@ def evaluate_signal_v32(df: pd.DataFrame, i: int, qqq_df: pd.DataFrame) -> Tuple
     if curr['EMA21'] < (curr['SMA50'] * 0.975):
         return False, {}
         
-    # Gate 2: MTF Alignment
-    weekly_ok, monthly_ok = calculate_weekly_monthly_alignment(df_window)
-    if not (weekly_ok and monthly_ok):
-        return False, {}
-        
-    # Gate 3: Impulse Wave & Orderly Retracement
+    # Gate 2: Preceding Impulse Wave & Orderly Retracement (First criteria: valid pullback)
     impulse_lookback = min(20, len(df_window) - 1)
     slice_impulse = df_window.iloc[-impulse_lookback:-1]
     swing_high = slice_impulse['High'].max()
     idx_high = slice_impulse['High'].idxmax()
     ema_at_high = df_window.loc[idx_high, 'EMA21']
     if swing_high < ema_at_high * 1.05:
-        return False, {}  # No prior markup
+        return False, {}  # No prior markup wave
     if (swing_high - curr['Low']) / swing_high < 0.03:
         return False, {}  # Inadequate retracement
         
-    # Gate 4: Candlestick Pattern OR Qualified Touch
+    # Gate 3: Candlestick Pattern OR Qualified Touch (Pattern formation after pullback)
     pat_found, pat_name, pat_weight = detect_candlestick_pattern(df_window)
     dist_ema21 = abs(curr['Close'] - curr['EMA21']) / curr['EMA21']
     dist_sma50 = abs(curr['Close'] - curr['SMA50']) / curr['SMA50']
     touch_found = (dist_ema21 <= 0.025) or (dist_sma50 <= 0.025)
     
     if not (pat_found or touch_found):
-        return False, {}
+        return False, {}  # No recognized pattern or touch after pullback
         
-    # Gate 5: Stalling Filter
+    # Gate 4: Weekly MTF Confirmation
+    weekly_ok, monthly_ok = calculate_weekly_monthly_alignment(df_window)
+    if not weekly_ok:
+        return False, {}  # Weekly close must be above EMA21
+        
+    # Gate 5: Demand Zone Proximity Check
+    low_21 = df_window['Low'].iloc[-21:].min()
+    in_demand_zone = curr['Low'] <= low_21 * 1.035
+    
+    # Gate 6: Stalling & Shooting Star Rejection Filters
     high_8 = df_window['High'].iloc[-8:].max()
     low_8 = df_window['Low'].iloc[-8:].min()
     if (high_8 - low_8) / low_8 < 0.05:
         return False, {}  # Horizontal churning
         
-    # Gate 6: Shooting Star Rejection Filter
     if is_shooting_star(curr):
-        return False, {}
+        return False, {}  # Heavy upper wick rejection
         
-    # Gate 7: Scoring
+    # Green session check
+    if len(df_window) >= 2 and curr['Close'] <= df_window.iloc[-2]['Close']:
+        return False, {}  # Red day rejection
+        
+    # Calculate IBD RS (0-100) — Informational only
+    rs_score = 50.0
+    if qqq_df is not None:
+        qqq_slice = qqq_df.loc[:curr.name]
+        rs_score = calculate_ibd_rs(df_window, qqq_slice)
+        
+    # Gate 7: Scoring (out of 7.0)
     score = 0.0
-    if curr['RSI14'] > 50: score += 1.0
-    if weekly_ok: score += 0.5
-    if monthly_ok: score += 0.5
-    if curr['Volume'] > curr['VOL_SMA21']: score += 0.5
-    low_21 = df_window['Low'].iloc[-21:].min()
-    if curr['Low'] <= low_21 * 1.035: score += 1.0
     if pat_found: score += pat_weight
+    if weekly_ok: score += 1.0
+    if in_demand_zone: score += 1.0
+    if curr['RSI14'] > 50: score += 1.0
+    if monthly_ok: score += 1.0
+    if curr['Volume'] > curr['VOL_SMA21']: score += 1.0
+    if touch_found: score += 1.0
     
-    # Touch-only check requires >= 5.0 and bullish body
+    # Touch-only check requires >= 5.0 and bullish candle body
     if not pat_found and touch_found:
         body = abs(curr['Close'] - curr['Open'])
         rng = curr['High'] - curr['Low']
@@ -222,7 +288,8 @@ def evaluate_signal_v32(df: pd.DataFrame, i: int, qqq_df: pd.DataFrame) -> Tuple
     return True, {
         'price': curr['Close'],
         'atr': curr['ATR14'],
-        'score': score,
+        'score': round(score, 1),
+        'rs_score': rs_score,
         'pattern': pat_name if pat_found else "Touch-Only"
     }
 
@@ -404,12 +471,12 @@ def run_backtest_simulation(all_data: Dict[str, pd.DataFrame], qqq_df: pd.DataFr
     return closed_trades
 
 # ----------------------------------------------------------------------
-# 6. PERFORMANCE REPORT GENERATOR
+# 6. PERFORMANCE REPORT & VISUALIZATION DASHBOARD
 # ----------------------------------------------------------------------
-def generate_performance_metrics(trades: List[Trade], title: str):
+def generate_performance_metrics(trades: List[Trade], title: str) -> Dict:
     if not trades:
         print(f"[{title}] No completed trades.")
-        return
+        return {}
         
     pnls = [t.realized_pnl for t in trades]
     wins = [p for p in pnls if p > 0]
@@ -429,7 +496,7 @@ def generate_performance_metrics(trades: List[Trade], title: str):
     max_dd = np.max(drawdown) if len(drawdown) > 0 else 0.0
     
     print("\n" + "="*70)
-    print(f" 📊 {title} PERFORMANCE AUDIT (5-YEAR RETROSPECTIVE)")
+    print(f" [REPORT] {title} PERFORMANCE AUDIT")
     print("="*70)
     print(f" Total Trades Executed:       {len(trades)}")
     print(f" Win Rate:                     {win_rate:.2f}% ({len(wins)}W / {len(losses)}L)")
@@ -441,15 +508,114 @@ def generate_performance_metrics(trades: List[Trade], title: str):
     print(f" Trade Expectancy:            ${expectancy:,.2f} per trade")
     print(f" Maximum Equity Drawdown:     ${max_dd:,.2f}")
     print("="*70)
+    
+    return {
+        'trades': len(trades),
+        'win_rate': win_rate,
+        'wins': len(wins),
+        'losses': len(losses),
+        'total_pnl': total_pnl,
+        'profit_factor': profit_factor,
+        'avg_win': avg_win,
+        'avg_loss': avg_loss,
+        'expectancy': expectancy,
+        'max_dd': max_dd
+    }
+
+def plot_backtest_dashboard(v32_trades: List[Trade], baseline_trades: Optional[List[Trade]] = None, save_path: str = "v32_backtest_dashboard.png"):
+    """
+    Renders a comprehensive 4-panel visual dashboard:
+    1. Cumulative Equity Curve ($): New v3.2 Institutional vs Old Baseline
+    2. Trade Outcome Breakdown (Pie Chart): Wins vs Losses
+    3. Exit Reasons Breakdown (Pie Chart): Profit Targets, Runner, TES, Stop Loss
+    4. Trade P/L (%) Distribution Histogram / Bar Chart
+    """
+    if not v32_trades:
+        print("No trades to plot.")
+        return
+        
+    try:
+        fig, axes = plt.subplots(2, 2, figsize=(16, 12))
+        fig.suptitle("Rajat Alpha v67 (Version 3.2) Institutional Backtest Dashboard", fontsize=18, fontweight='bold', y=0.98)
+        
+        # 1. CUMULATIVE EQUITY CURVE
+        ax1 = axes[0, 0]
+        v32_pnl = np.cumsum([t.realized_pnl for t in v32_trades])
+        ax1.plot(range(1, len(v32_pnl) + 1), v32_pnl, label="v3.2 Institutional (SOEE + Hybrid ATR)", color='#10b981', linewidth=2.5)
+        
+        if baseline_trades:
+            base_pnl = np.cumsum([t.realized_pnl for t in baseline_trades])
+            ax1.plot(range(1, len(base_pnl) + 1), base_pnl, label="Old Baseline (Market Orders + 17% SL)", color='#ef4444', linewidth=1.8, linestyle='--')
+            
+        ax1.set_title("Cumulative Equity Curve ($)", fontsize=14, fontweight='bold')
+        ax1.set_xlabel("Trade Sequence Number")
+        ax1.set_ylabel("Net Realized Profit / Loss ($)")
+        ax1.grid(True, alpha=0.3)
+        ax1.legend(loc="upper left")
+        
+        # 2. WIN / LOSS PIE CHART
+        ax2 = axes[0, 1]
+        wins = sum(1 for t in v32_trades if t.realized_pnl > 0)
+        losses = sum(1 for t in v32_trades if t.realized_pnl <= 0)
+        
+        pie_labels = [f"Wins ({wins})", f"Losses ({losses})"]
+        pie_colors = ['#10b981', '#f43f5e']
+        ax2.pie([wins, losses], labels=pie_labels, colors=pie_colors, autopct='%1.1f%%',
+                startangle=140, explode=(0.06, 0), textprops={'fontsize': 12, 'weight': 'bold'})
+        ax2.set_title("Win Rate Distribution", fontsize=14, fontweight='bold')
+        
+        # 3. EXIT REASONS PIE CHART
+        ax3 = axes[1, 0]
+        reason_counts = {}
+        for t in v32_trades:
+            r = t.exit_reason or "Unknown"
+            if "PT" in r or "Target" in r: r = "Profit Targets"
+            elif "Runner" in r: r = "Runner Exit"
+            elif "TES" in r or "Time" in r: r = "Dynamic TES"
+            elif "Stop Loss" in r or "SL" in r: r = "Stop Loss"
+            reason_counts[r] = reason_counts.get(r, 0) + 1
+            
+        reason_labels = [f"{k} ({v})" for k, v in reason_counts.items()]
+        colors_exit = ['#0ea5e9', '#8b5cf6', '#f59e0b', '#ec4899', '#64748b']
+        ax3.pie(reason_counts.values(), labels=reason_labels, colors=colors_exit[:len(reason_counts)], 
+                autopct='%1.1f%%', startangle=110, textprops={'fontsize': 11})
+        ax3.set_title("Trade Exit Mechanisms", fontsize=14, fontweight='bold')
+        
+        # 4. TRADE P/L (%) DISTRIBUTION
+        ax4 = axes[1, 1]
+        trade_pnl_pcts = [((t.realized_pnl / (t.orig_shares * t.entry_price)) * 100) if (t.orig_shares * t.entry_price) > 0 else 0 for t in v32_trades]
+        bar_colors = ['#10b981' if p >= 0 else '#f43f5e' for p in trade_pnl_pcts]
+        ax4.bar(range(1, len(trade_pnl_pcts) + 1), trade_pnl_pcts, color=bar_colors, width=0.8, alpha=0.85)
+        ax4.axhline(0, color='black', linewidth=0.8, linestyle='--')
+        ax4.set_title("Trade Return Distribution (%)", fontsize=14, fontweight='bold')
+        ax4.set_xlabel("Trade Sequence Number")
+        ax4.set_ylabel("P/L % per Trade")
+        ax4.grid(True, alpha=0.3)
+        
+        plt.tight_layout()
+        plt.savefig(save_path, dpi=300)
+        print(f"\n[DASHBOARD] Successfully saved to: {save_path}")
+        
+        # Show interactive plot if running inside Jupyter / Google Colab
+        if 'ipykernel' in sys.modules or 'google.colab' in sys.modules:
+            plt.show()
+        else:
+            plt.close()
+    except Exception as e:
+        print(f"Visualization note: Could not render interactive plot: {e}")
 
 # ----------------------------------------------------------------------
 # 7. MAIN EXECUTION PIPELINE
 # ----------------------------------------------------------------------
-def main():
-    print("🚀 Initializing Rajat Alpha v67 5-Year Institutional Backtest...")
-    print(f"Loading {len(DEFAULT_WATCHLIST)} institutional growth stocks...")
+def main(tickers: Optional[List[str]] = None, lookback_years: int = 3):
+    watchlist = tickers if tickers else DEFAULT_WATCHLIST
+    print("=" * 80)
+    print(">> RAJAT ALPHA V67 (VERSION 3.2) - INSTITUTIONAL BACKTEST RUNNER")
+    print("=" * 80)
+    print(f"Loading {len(watchlist)} institutional stocks across {lookback_years} years...")
+    print(f"Watchlist: {', '.join(watchlist)}")
     
-    start_date = (datetime.now() - timedelta(days=5*365)).strftime("%Y-%m-%d")
+    start_date = (datetime.now() - timedelta(days=lookback_years*365)).strftime("%Y-%m-%d")
     end_date = datetime.now().strftime("%Y-%m-%d")
     
     # Download Benchmark
@@ -461,14 +627,14 @@ def main():
     
     # Download Universe Data
     all_data = {}
-    for sym in DEFAULT_WATCHLIST:
+    for sym in watchlist:
         try:
             df = yf.download(sym, start=start_date, end=end_date, progress=False)
-            if df is not None and len(df) > 250:
+            if df is not None and len(df) > 200:
                 if isinstance(df.columns, pd.MultiIndex):
                     df.columns = df.columns.get_level_values(0)
                 all_data[sym] = calculate_indicators(df)
-        except Exception as e:
+        except Exception:
             continue
             
     print(f"Successfully processed indicators for {len(all_data)} tickers.")
@@ -476,12 +642,33 @@ def main():
     # Run Baseline Simulation
     print("\n[1/2] Running Old v67 Baseline Simulation...")
     baseline_trades = run_backtest_simulation(all_data, qqq_df, mode="baseline")
-    generate_performance_metrics(baseline_trades, "OLD V67 BASELINE (MARKET ORDERS & FIXED 17% SL)")
+    m_base = generate_performance_metrics(baseline_trades, "OLD V67 BASELINE (MARKET ORDERS & FIXED 17% SL)")
     
     # Run Institutional v3.2 Simulation
     print("\n[2/2] Running New v3.2 Institutional Simulation...")
     v32_trades = run_backtest_simulation(all_data, qqq_df, mode="v32")
-    generate_performance_metrics(v32_trades, "NEW V3.2 INSTITUTIONAL (SOEE & HYBRID ATR)")
+    m_v32 = generate_performance_metrics(v32_trades, "NEW V3.2 INSTITUTIONAL (SOEE & HYBRID ATR)")
+    
+    # Comparison Table
+    if m_base and m_v32:
+        print("\n" + "="*80)
+        print("== STRATEGY UPGRADE COMPARISON TABLE ==")
+        print("="*80)
+        print(f"{'Performance Metric':<30} | {'Old Baseline':<20} | {'New v3.2 Institutional':<20}")
+        print("-" * 76)
+        print(f"{'Total Trades':<30} | {m_base['trades']:<20} | {m_v32['trades']:<20}")
+        print(f"{'Win Rate (%)':<30} | {m_base['win_rate']:<19.1f}% | {m_v32['win_rate']:<19.1f}%")
+        print(f"{'Total Realized P/L ($)':<30} | ${m_base['total_pnl']:<19,.2f} | ${m_v32['total_pnl']:<19,.2f}")
+        print(f"{'Profit Factor':<30} | {m_base['profit_factor']:<20.2f} | {m_v32['profit_factor']:<20.2f}")
+        print(f"{'Average Win ($)':<30} | ${m_base['avg_win']:<19,.2f} | ${m_v32['avg_win']:<19,.2f}")
+        print(f"{'Average Loss ($)':<30} | ${m_base['avg_loss']:<19,.2f} | ${m_v32['avg_loss']:<19,.2f}")
+        print(f"{'Trade Expectancy ($)':<30} | ${m_base['expectancy']:<19,.2f} | ${m_v32['expectancy']:<19,.2f}")
+        print(f"{'Maximum Drawdown ($)':<30} | ${m_base['max_dd']:<19,.2f} | ${m_v32['max_dd']:<19,.2f}")
+        print("="*80)
+        
+    # Plot Visual Dashboard
+    print("\nGenerating visual performance charts...")
+    plot_backtest_dashboard(v32_trades, baseline_trades, save_path="v32_backtest_dashboard.png")
 
 if __name__ == "__main__":
     main()

@@ -38,47 +38,77 @@ The backtest pipeline located in [`scripts/backtest_colab_pipeline.py`](file:///
 
 ---
 
-## 2. Quickstart: Run in Google Colab (3 Steps)
+## 2. Quickstart: Run in Google Colab (2 Methods)
 
-### Step 1: Open Google Colab
-Navigate to [colab.research.google.com](https://colab.research.google.com) and create a **New Notebook**.
+### Method A: Single-Cell 1-Click Execution (RECOMMENDED - No File Upload Required)
+1. Open [colab.research.google.com](https://colab.research.google.com) and click **New Notebook**.
+2. In Cell 1, install dependencies and download the script directly:
+   ```python
+   # 1. Install dependencies
+   !pip install -q yfinance matplotlib pandas numpy tabulate
+   
+   # 2. Download or run the pipeline directly
+   !curl -s -O https://raw.githubusercontent.com/rajat-algo/Single_Buy2.0/feature/v67-institutional-upgrade/scripts/backtest_colab_pipeline.py
+   !python backtest_colab_pipeline.py
+   ```
 
-### Step 2: Install Prerequisites
-In the first Colab cell, enter and run:
-```python
-!pip install yfinance pandas numpy tabulate matplotlib pytz
-```
+### Method B: Copy & Paste Directly into a Colab Notebook Cell
+If you prefer running without GitHub, simply:
+1. Open [`scripts/backtest_colab_pipeline.py`](file:///C:/Alpaca_Algo2.0/Single_Buy2.0/scripts/backtest_colab_pipeline.py) on your machine.
+2. Copy the entire file content (Ctrl+A, Ctrl+C).
+3. Paste directly into a blank cell in Google Colab.
+4. At the top of the cell, ensure:
+   ```python
+   !pip install -q yfinance matplotlib pandas numpy tabulate
+   ```
+5. Press **Shift + Enter** (or click the **Play** button).
 
-### Step 3: Paste and Execute Pipeline
-You can either upload `scripts/backtest_colab_pipeline.py` or paste the script directly into a Colab cell and execute:
-```python
-!python scripts/backtest_colab_pipeline.py
-```
-
-The script will download 5 years of price history for the universe, calculate indicators, simulate all trades, and print the side-by-side performance report.
+> [!NOTE]
+> **Why execution previously failed:**  
+> Running `!python scripts/backtest_colab_pipeline.py` in Colab failed because Colab's default root directory is `/content/` and does not contain a `scripts/` folder unless explicitly cloned. In addition, local console code-pages (such as Windows `cp1252`) crashed on raw emoji characters. Both issues have been resolved: the script now uses safe ASCII logging with automated UTF-8 stream reconfiguring and can be run directly from `/content/`.
 
 ---
 
-## 3. Configuring Symbols (Single vs Multiple vs Full Universe)
+## 3. Configuring Symbols & Time Horizons
 
-You can easily adjust the symbols to test in the script under the `DEFAULT_WATCHLIST` definition:
+You can customize the backtest tickers and lookback period right in the `main()` call at the bottom of the script:
 
-### Option A: Backtest a Single Stock (e.g., NVDA)
+### Option A: Backtest Top Tech Leaders (Fastest - 30 seconds)
 ```python
-DEFAULT_WATCHLIST = ["NVDA"]
+main(tickers=["AAPL", "NVDA", "MSFT", "AMZN", "META", "GOOGL"], lookback_years=3)
 ```
 
-### Option B: Backtest a Small Focus Portfolio (e.g., 5 Stocks)
+### Option B: Backtest Your Production Watchlist (e.g., Regional Banks, Mid-Caps)
 ```python
-DEFAULT_WATCHLIST = ["AAPL", "MSFT", "NVDA", "AMZN", "GOOGL"]
+main(tickers=["CATY", "WSBC", "CLMT", "BFH", "INSW", "DXCM", "CSX", "VOYA"], lookback_years=3)
 ```
 
-### Option C: Backtest the Full Institutional Universe (94 Stocks)
-Keep the default list or load directly from your `watchlist.txt`:
+### Option C: Backtest a Single High-Beta Stock (e.g., NVDA)
 ```python
-with open("watchlist.txt", "r") as f:
-    DEFAULT_WATCHLIST = [line.strip() for line in f if line.strip() and not line.startswith("#")]
+main(tickers=["NVDA"], lookback_years=5)
 ```
+
+---
+
+## 4. Visual Dashboard & Chart Interpretation
+
+Upon completing execution, the script automatically renders and saves a high-resolution 4-panel visual dashboard (`v32_backtest_dashboard.png`):
+
+1. **Panel 1 (Top Left) — Cumulative Equity Curve ($):**
+   - Displays the net equity trajectory over time comparing the **v3.2 Institutional Engine (Green line)** against the **Old Baseline (Red dashed line)**.
+   - Highlights the impact of SOEE midpoint execution (+3% to +5% annual return saved from spread) and ATR trailing stops.
+2. **Panel 2 (Top Right) — Win Rate Distribution (Pie Chart):**
+   - Displays the percentage and raw count of Winning vs Losing trades.
+   - Institutional target: **50% to 58% Win Rate** with an asymmetric Profit Factor $\ge 1.7$.
+3. **Panel 3 (Bottom Left) — Trade Exit Mechanisms (Pie Chart):**
+   - Breaks down exact liquidation drivers:
+     - **Profit Targets (PT1, PT2, PT3):** Shows % of trades locking in partial gains.
+     - **Runner Exit:** Shows trades riding multi-week institutional runners.
+     - **Dynamic Structural TES:** Shows trades exiting orderly when bases stall or mature.
+     - **Stop Loss:** Shows contained defensive exits.
+4. **Panel 4 (Bottom Right) — Trade Return Distribution (Bar Chart):**
+   - Plots every trade's percentage P/L chronologically (Green bars for profits, Red bars for losses).
+   - Confirms that losses are capped tightly (-2% to -4%) while winning trades expand to +10%, +15%, and +25%+.
 
 ---
 

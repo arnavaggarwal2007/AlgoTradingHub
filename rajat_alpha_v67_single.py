@@ -12,23 +12,30 @@ CORE STRATEGY & RISK MANAGEMENT LOGIC:
 1. Signal Generation Pipeline (7 Sequential Gating Checks):
    - Check 1: Market Structure (50 SMA > 200 SMA, 21 EMA >= 50 SMA - 2.5% tolerance)
    - Check 2: Multi-Timeframe Alignment (Weekly Close > Weekly EMA21, Monthly Close > Monthly EMA10)
-   - Check 3: Preceding Impulse Wave & Orderly Retracement (Swing High >= 5% above EMA21, retracing >= 3%)
+   - Check 3: Preceding Impulse Wave & Orderly Retracement (Swing High >= 5% above EMA21 within 20 bars, retracing >= 3%)
    - Check 4: Pattern Confirmation (Engulfing, Piercing, Tweezer, Hammer, Upside Reversal) OR Qualified Touch
-   - Check 5: Stalling Filter (Rejects horizontal consolidation churn)
+   - Check 5: Stalling Filter (Rejects horizontal consolidation churn < 5% range over 8 days)
    - Check 6: Extended Stock Filter (Gap up < 4%, Green session required)
-   - Check 6.5: Shooting Star Rejection Filter (Upper wick > 50% of range indicates supply distribution)
+   - Check 6.75: Shooting Star Rejection Filter (Upper wick > 50% of range indicates seller distribution; mandatory)
    - Check 7: Conviction Score (RSI>50, MTF, Volume, Demand Zone, Touch Bonuses, RS Bonus >= 4.0)
-   - Special: Touch-Only Dual Gate (Requires Score >= 5.0 AND Bullish Candle Confirmation)
+   - Special: Touch-Only Dual Gate (Requires Score >= 5.0 AND Bullish Real Body >= 50% closing in upper third)
 
 2. Risk Management & Execution Architecture:
    - Initial Stop Loss: Hybrid ATR-adaptive SL (1.5x - 2.5x ATR, capped at 17%, floored at 5%)
-   - Stop Loss Stepper: User-Fixed or ATR-Proportional (-4% @ +5% gain, BE @ +8% gain, +3% @ +10% gain, +1% ratchet)
-   - Closing-Basis Protection: Stop losses evaluated on confirmed daily close (15:55-16:00 ET)
-   - First-Hour Volatility Guard: Suppresses loss-exits during morning noise (09:30-10:30 ET) when market down
-   - Partial Exits: 4-Tier Ladder (20% @ +5%, 25% @ +10%, 25% @ +15%, 30% Runner with 1:1 Trailing Stop)
-   - Runner Mode: Position exempt from TES holding limits; rides major multi-week institutional markups
-   - Dynamic Structural TES Engine: Grants 10-day extensions for maturing consolidations holding > EMA21
-   - Smart Order Execution Engine (SOEE): Midpoint limit order pegging to eliminate the Jobbing Disadvantage
+   - Multi-Stage Stop Loss Stepper:
+     * Stage 1 (+5% Gain): SL moves to -4.0% below entry (cuts open risk from -17% to -4%)
+     * Stage 2 (+8% Gain): SL moves to +1.0% above buy price (locks in guaranteed positive exit)
+     * Stage 3 (+10% Gain): SL locks in +3.0% net profit
+     * Stage 4 / Ratchet (+15% Gain = +5% above Stage 3): SL moves to Stage 3 level (+10%) and ratchets +1% for each +1% advance
+     * Adaptive Hybrid Stepper: Automatically routes high-ATR stocks (>3.5%) to ATR breathing room and low-ATR stocks to fixed milestones
+     * Monotonic Guarantee: Stop loss mathematically never steps backward
+   - True Closing-Basis Protection: Stop losses evaluated on confirmed daily close (15:55-16:00 ET)
+   - First-Hour Volatility Guard: Suppresses loss exits during opening morning noise (09:30-10:30 ET) when market index is down
+   - 4-Tier Partial Exits: 20% @ +5%, 25% @ +10%, 25% @ +15%, 30% Runner
+   - Runner Mode Protocol: Position exempt from TES holding limits; trails 1:1 indefinitely
+   - Dynamic Structural TES Engine: 21-day base hold; grants +10-day extensions if consolidating >= 21 EMA (up to 41 days max)
+   - Smart Order Execution Engine (SOEE): Midpoint limit order pegging to eliminate the Jobbing Disadvantage (-0.40% to -0.80% round-trip)
+   - Fast 1-Line Manual Overrides via config/selllist.txt (e.g. 'AAPL', 'AAPL:SL:145.50', 'AAPL:TES:10') without modifying config.json
 
 ================================================================================
 """

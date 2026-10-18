@@ -115,9 +115,10 @@ $$\text{Stop Loss} = \text{Entry Price} - (k \times \text{ATR}_{14})$$
 ### 2. Multi-Stage Stop Loss Stepper (Monotonic Trailing Engine)
 The stop loss moves upward mechanically as profit develops and never decreases:
 - **Gain $\ge +5.0\%$**: Stop loss immediately moves to **-4.0%** below entry (cuts open risk from -17% to -4%).
-- **Gain $\ge +8.0\%$**: Stop loss moves to **Breakeven (0.0%)**.
-- **Gain $\ge +10.0\%$**: Stop loss locks in **+3.0% profit**.
-- **Gain $> +10.0\%$**: Stop loss ratchets upward **+1.0% for every additional +1.0% price gain**.
+- **Gain $\ge +8.0\%$**: Stop loss moves to **+1.0% above buy price** (locks in a guaranteed net-positive trade).
+- **Gain $\ge +10.0\%$**: Stop loss locks in **+3.0% net profit**.
+- **Gain $\ge +15.0\%$ (+5% above Stage 3)**: Stop loss moves to Stage 3 level (**+10.0% locked in**) and ratchets upward **+1.0% for every additional +1.0% price gain** thereafter.
+- **Adaptive Hybrid Mode**: High-ATR stocks (>3.5%) automatically receive volatility-proportional ATR breathing room, while low-ATR stocks use discrete milestones.
 
 ### 3. True Daily Closing-Basis Stop Loss Evaluation
 - Stop losses are evaluated strictly between **15:55 and 16:00 ET** based on confirmed daily closing prices.
@@ -214,15 +215,16 @@ The system is configured via [`config/config.json`](file:///C:/Alpaca_Algo2.0/Si
 | `stock_gap_override_pct` | `float` | `-0.10` | Hard overnight gap circuit breaker (-10.0% gap) |
 | `allow_profit_exits` | `boolean` | `true` | Keeps profit taking active during morning guard window |
 
-### `manual_overrides`
-Allows real-time intervention without stopping the bot:
-```json
-"manual_overrides": {
-  "AAPL": {"force_sell": true, "reason": "Earnings de-risk"},
-  "NVDA": {"update_stop_loss": 128.50},
-  "MSFT": {"extend_tes_days": 15}
-}
+### Fast 1-Line Overrides via `config/selllist.txt` (Recommended)
+To prevent bloat and eliminate live syntax risks in `config.json`, you can manage manual interventions directly in [`config/selllist.txt`](file:///C:/Alpaca_Algo2.0/Single_Buy2.0/config/selllist.txt):
+```text
+AAPL                          # Submits market sell order to Alpaca & cleanly closes DB record
+CSCO:FORCE_SELL:Earnings Risk # Full market exit with specific custom audit reason
+MSFT:SL:415.50                # Updates stop loss in DB immediately
+NVDA:TES:10                   # Manually grants +10 days TES extension
 ```
+
+For the complete exhaustive list of every parameter, valid string enums, and operational recipes, see the **[Configuration Reference Guide](file:///C:/Alpaca_Algo2.0/Single_Buy2.0/docs/CONFIGURATION_REFERENCE_GUIDE.md)**.
 
 ---
 

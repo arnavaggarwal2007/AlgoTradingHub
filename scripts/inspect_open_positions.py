@@ -9,3 +9,4 @@ for i, r in df.iterrows():
     for col in df.columns:
         print(f"  {col}: {r[col]}")
 conn.close()
+

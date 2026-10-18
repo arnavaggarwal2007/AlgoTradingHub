@@ -455,8 +455,32 @@ class ConfigManager:
             logger.error(f"Error loading configuration from {self.config_path}: {e}")
             raise
     
-    def get(self, section: str, key: str, default: Any = None) -> Any:
-        return self.config.get(section, {}).get(key, default)
+    def get(self, *args, **kwargs) -> Any:
+        """
+        Flexible configuration getter:
+          get(top_level_key, default=None)
+          get(section, key, default=None)
+        """
+        default = kwargs.get('default', None)
+        if len(args) == 1:
+            return self.config.get(args[0], default)
+        elif len(args) == 2:
+            section, second = args
+            if section in self.config:
+                val = self.config[section]
+                if isinstance(val, dict) and isinstance(second, str) and second in val:
+                    return val[second]
+                if not isinstance(val, dict) or not isinstance(second, str):
+                    return val
+                return second
+            return second
+        elif len(args) >= 3:
+            section, key, default_val = args[0], args[1], args[2]
+            sec = self.config.get(section, {})
+            if isinstance(sec, dict):
+                return sec.get(key, default_val)
+            return default_val
+        return default
 
 # ================================================================================
 # MARKET DATA FETCHER (With API Resilience & Midpoint Quotes)

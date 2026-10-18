@@ -515,3 +515,4 @@ def run_full_protocol_analysis(trade_log_path="docs/scanned_watchlist_trade_log.
 
 if __name__ == '__main__':
     run_full_protocol_analysis()
+

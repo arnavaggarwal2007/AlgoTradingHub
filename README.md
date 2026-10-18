@@ -268,12 +268,11 @@ SOEE eliminates this leakage via an automated 3-stage limit order ladder:
 
 ## 📊 Backtesting Pipeline (Google Colab & Local)
 
-A complete multi-year retrospective simulation engine is provided in [`scripts/backtest_colab_pipeline.py`](file:///C:/Alpaca_Algo2.0/Single_Buy2.0/scripts/backtest_colab_pipeline.py) and ready-to-run Jupyter notebook [`scripts/Rajat_Alpha_v67_Colab_Backtest.ipynb`](file:///C:/Alpaca_Algo2.0/Single_Buy2.0/scripts/Rajat_Alpha_v67_Colab_Backtest.ipynb).
-
-### Running in Google Colab (1-Click):
-1. Open [Google Colab](https://colab.research.google.com).
-2. Upload [`scripts/Rajat_Alpha_v67_Colab_Backtest.ipynb`](file:///C:/Alpaca_Algo2.0/Single_Buy2.0/scripts/Rajat_Alpha_v67_Colab_Backtest.ipynb).
-3. Select **Runtime -> Run All** (`Ctrl+F9`). See [Google Colab Guide](file:///C:/Alpaca_Algo2.0/Single_Buy2.0/docs/GOOGLE_COLAB_BACKTEST_GUIDE.md) for full details.
+### Institutional Prop & Portfolio Simulator Notebook:
+For capacity-constrained portfolio simulations, Monte Carlo pass rates, and multi-configuration comparisons, use:
+[`scripts/Colab_backtest/Rajat_Alpha_Institutional_Prop_Protocol.ipynb`](file:///C:/Alpaca_Algo2.0/Single_Buy2.0/scripts/Colab_backtest/Rajat_Alpha_Institutional_Prop_Protocol.ipynb)
+- **Cell 14**: 4-Configuration Portfolio Comparator (Standard, Conservative, Aggressive, Prop Spec). Generates the Master 6-Tab Excel Workbook (`rajat_alpha_4_configurations_simulation.xlsx`) with all 21 strategy attributes, plus Tab 6 containing the entire raw scanned universe (`rajat_alpha_scanned_trade_log.csv`). Features an interactive HTML Download Center with one-click direct download buttons for all trade logs.
+- **Cell 15**: One-Click Batch Downloader & Master ZIP Archive (`rajat_alpha_all_simulation_reports.zip`).
 
 ### Empirical Backtest Performance Comparison (50 Stocks, 2023–2026):
 The system was validated over a 50-stock production watchlist (`NVDA`, `MSFT`, `AAPL`, `AMZN`, `GOOGL`, `META`, `TSLA`, `AMD`, `AVGO`, `NFLX`, `PLTR`, `ARM`, `SMCI`, `AXGN`, `U`, `PATH`, etc.) across bull, choppy, and bear regimes:

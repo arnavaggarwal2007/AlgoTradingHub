@@ -224,8 +224,8 @@ For elite institutional evaluation, open [`scripts/Colab_backtest/Rajat_Alpha_In
 11. **Cell 11: Funded Account Extraction Phase** — Rules for recurring 80/20 profit withdrawals.
 12. **Cell 12: $10,000 Capital Compounding Engine** — 5-Year historical compounding vs 4-Year forward Monte Carlo growth cone.
 13. **Cell 13: Quantitative Beast Stock Selection Engine** — Ranks scanned symbols to isolate Tier 1 Beast stocks.
-14. **Cell 14: Realistic Portfolio Capacity Simulator** — Simulates chronological day-by-day execution with **Max Concurrent Open Positions** constraint (max 5 positions), rejecting/skipping trades when slots are full.
-15. **Cell 15: CSV Exports** — Downloads complete trade logs and proposals.
+14. **Cell 14: 4-Configuration Portfolio Comparator & One-Click Download Center** — Simulates chronological day-by-day execution with **Max Concurrent Open Positions** and **Daily Entry Limits** across 4 configuration presets (Standard, Conservative, Aggressive, Prop Spec). Generates the **Master 6-Tab Excel Workbook** (`rajat_alpha_4_configurations_simulation.xlsx`) containing all 21 columns (all strategy fields + `Execution Status`, `Allocated ($)`, `Realized PnL ($)`), plus Tab 6 with the entire raw unconstrained scanned universe (`rajat_alpha_scanned_trade_log.csv`). Features an interactive HTML download center with one-click direct download buttons for all files.
+15. **Cell 15: Batch Exporter & Master ZIP Archive Downloader** — Bundles the 6-tab Excel workbook, `rajat_alpha_scanned_trade_log.csv`, and all individual configuration CSV trade logs into a single compressed package (`rajat_alpha_all_simulation_reports.zip`) with auto-download triggers.
 
 ---
 

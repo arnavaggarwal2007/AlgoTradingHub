@@ -91,47 +91,52 @@ def simulate_portfolio_config(trades_df, cfg, initial_capital=10000.0):
         for _, t in candidates.iterrows():
             score = t['Score']
             sym = t['Symbol']
+            base_row = t.to_dict()
+            if hasattr(base_row.get('Entry Date'), 'strftime'):
+                base_row['Entry Date'] = base_row['Entry Date'].strftime('%Y-%m-%d')
+            if hasattr(base_row.get('Exit Date'), 'strftime'):
+                base_row['Exit Date'] = base_row['Exit Date'].strftime('%Y-%m-%d')
 
             # Check Score Gate
             if score < min_score:
-                skipped_trades.append({
-                    'Symbol': sym, 'Entry Date': d.strftime('%Y-%m-%d'), 'Buy Price': t['Buy Price'],
-                    'Exit Date': t['Exit Date'].strftime('%Y-%m-%d'), 'Score': score,
-                    'Return (%)': t['Return (%)'], 'Execution Status': f'SKIPPED (Score {score} < {min_score})',
-                    'Allocated ($)': 0.0, 'Realized PnL ($)': 0.0, 'Ending Equity ($)': cash + sum(p['pos_val'] for p in active_pos)
-                })
+                rec = dict(base_row)
+                rec['Execution Status'] = f'SKIPPED (Score {score} < {min_score})'
+                rec['Allocated ($)'] = 0.0
+                rec['Realized PnL ($)'] = 0.0
+                rec['Ending Equity ($)'] = cash + sum(p['pos_val'] for p in active_pos)
+                skipped_trades.append(rec)
                 continue
 
             # Check Max Daily Limit
             if trades_entered_today >= max_daily:
-                skipped_trades.append({
-                    'Symbol': sym, 'Entry Date': d.strftime('%Y-%m-%d'), 'Buy Price': t['Buy Price'],
-                    'Exit Date': t['Exit Date'].strftime('%Y-%m-%d'), 'Score': score,
-                    'Return (%)': t['Return (%)'], 'Execution Status': f'SKIPPED (Daily Limit {max_daily} Met)',
-                    'Allocated ($)': 0.0, 'Realized PnL ($)': 0.0, 'Ending Equity ($)': cash + sum(p['pos_val'] for p in active_pos)
-                })
+                rec = dict(base_row)
+                rec['Execution Status'] = f'SKIPPED (Daily Limit {max_daily} Met)'
+                rec['Allocated ($)'] = 0.0
+                rec['Realized PnL ($)'] = 0.0
+                rec['Ending Equity ($)'] = cash + sum(p['pos_val'] for p in active_pos)
+                skipped_trades.append(rec)
                 continue
 
             # Check Max Concurrent Open Positions Limit
             if len(active_pos) >= max_open:
-                skipped_trades.append({
-                    'Symbol': sym, 'Entry Date': d.strftime('%Y-%m-%d'), 'Buy Price': t['Buy Price'],
-                    'Exit Date': t['Exit Date'].strftime('%Y-%m-%d'), 'Score': score,
-                    'Return (%)': t['Return (%)'], 'Execution Status': f'SKIPPED (Max Capacity {max_open} Full)',
-                    'Allocated ($)': 0.0, 'Realized PnL ($)': 0.0, 'Ending Equity ($)': cash + sum(p['pos_val'] for p in active_pos)
-                })
+                rec = dict(base_row)
+                rec['Execution Status'] = f'SKIPPED (Max Capacity {max_open} Full)'
+                rec['Allocated ($)'] = 0.0
+                rec['Realized PnL ($)'] = 0.0
+                rec['Ending Equity ($)'] = cash + sum(p['pos_val'] for p in active_pos)
+                skipped_trades.append(rec)
                 continue
 
             # Check Available Cash
             curr_equity = cash + sum(p['pos_val'] for p in active_pos)
             pos_size = min(curr_equity * alloc_pct, cash)
             if pos_size < 100.0:
-                skipped_trades.append({
-                    'Symbol': sym, 'Entry Date': d.strftime('%Y-%m-%d'), 'Buy Price': t['Buy Price'],
-                    'Exit Date': t['Exit Date'].strftime('%Y-%m-%d'), 'Score': score,
-                    'Return (%)': t['Return (%)'], 'Execution Status': 'SKIPPED (Insufficient Cash)',
-                    'Allocated ($)': 0.0, 'Realized PnL ($)': 0.0, 'Ending Equity ($)': curr_equity
-                })
+                rec = dict(base_row)
+                rec['Execution Status'] = 'SKIPPED (Insufficient Cash)'
+                rec['Allocated ($)'] = 0.0
+                rec['Realized PnL ($)'] = 0.0
+                rec['Ending Equity ($)'] = curr_equity
+                skipped_trades.append(rec)
                 continue
 
             # Enter Position
@@ -140,15 +145,17 @@ def simulate_portfolio_config(trades_df, cfg, initial_capital=10000.0):
             ret_net = (t['Return (%)'] / 100.0) - slippage
             pnl_dollars = pos_size * ret_net
 
-            active_pos.append({
-                'Symbol': sym, 'Entry Date': t['Entry Date'].strftime('%Y-%m-%d'), 'Buy Price': t['Buy Price'],
-                'Exit Date': t['Exit Date'].strftime('%Y-%m-%d'), 'Score': score,
-                'Return (%)': round(ret_net * 100.0, 2), 'Execution Status': 'EXECUTED',
-                'Allocated ($)': round(pos_size, 2), 'Realized PnL ($)': round(pnl_dollars, 2),
-                'Ending Equity ($)': round(curr_equity + pnl_dollars, 2),
-                'pos_val': pos_size, 'pnl': pnl_dollars, 'exit_date': t['Exit Date'],
-                'hold_days': t.get('Hold Days', 0), 'exit_reason': t.get('Exit Reason', 'Exit')
-            })
+            rec = dict(base_row)
+            rec['Execution Status'] = 'EXECUTED'
+            rec['Return (%)'] = round(ret_net * 100.0, 2)
+            rec['Allocated ($)'] = round(pos_size, 2)
+            rec['Realized PnL ($)'] = round(pnl_dollars, 2)
+            rec['Ending Equity ($)'] = round(curr_equity + pnl_dollars, 2)
+            # Internal fields for tracking
+            rec['pos_val'] = pos_size
+            rec['pnl'] = pnl_dollars
+            rec['exit_date'] = t['Exit Date']
+            active_pos.append(rec)
 
         # Record daily equity snapshot
         curr_total = cash + sum(p['pos_val'] for p in active_pos)
@@ -185,11 +192,11 @@ def simulate_portfolio_config(trades_df, cfg, initial_capital=10000.0):
     years = max(0.5, days_span / 365.25)
     cagr = (((final_equity / initial_capital) ** (1.0 / years)) - 1.0) * 100.0
 
-    # Build clean master trade log combining executed and skipped
-    clean_cols = ['Symbol', 'Entry Date', 'Buy Price', 'Exit Date', 'Score', 'Return (%)', 'Execution Status', 'Allocated ($)', 'Realized PnL ($)', 'Ending Equity ($)']
-    clean_acc = acc_df[[c for c in clean_cols if c in acc_df.columns]]
-    clean_skip = skip_df[[c for c in clean_cols if c in skip_df.columns]]
-    combined_log = pd.concat([clean_acc, clean_skip]).sort_values(by=['Entry Date', 'Score'], ascending=[True, False]).reset_index(drop=True)
+    # Build clean master trade log combining executed and skipped with ALL strategy attributes
+    combined_log = pd.concat([acc_df, skip_df]).sort_values(by=['Entry Date', 'Score'], ascending=[True, False]).reset_index(drop=True)
+    for col in ['pos_val', 'pnl', 'exit_date']:
+        if col in combined_log.columns:
+            combined_log = combined_log.drop(columns=[col])
 
     metrics = {
         'Signals in Universe': len(df),
@@ -269,14 +276,20 @@ def run_comparator():
     ]
     with pd.ExcelWriter(excel_path, engine="openpyxl") as writer:
         summary_df.to_excel(writer, sheet_name="Comparison_Summary", index=False)
+        pref_cols = [
+            'Execution Status', 'Symbol', 'Entry Date', 'Exit Date', 'Buy Price', 'Exit Price',
+            'Score', 'Return (%)', 'Allocated ($)', 'Realized PnL ($)', 'Pattern', 'IBD RS',
+            'Initial SL', 'SL Price', 'SL Type', 'Stepper Triggered', 'TES Status',
+            'Exit Reason', 'Hold Days', 'Is Runner'
+        ]
         for (name, res), sname in zip(results.items(), sheet_names):
             clean_log = res['combined_log'].copy()
-            # Order columns intuitively
-            pref_cols = ['Execution Status', 'Symbol', 'Entry Date', 'Exit Date', 'Buy Price', 'Score', 'Return (%)', 'Allocated ($)', 'Realized PnL ($)']
-            rem_cols = [c for c in clean_log.columns if c not in pref_cols]
+            rem_cols = [c for c in clean_log.columns if c not in pref_cols and c not in ('pos_val', 'pnl', 'exit_date')]
             ordered_cols = [c for c in pref_cols if c in clean_log.columns] + rem_cols
             clean_log[ordered_cols].to_excel(writer, sheet_name=sname, index=False)
-    print(f"📗 Saved Master Multi-Tab Excel Workbook: {excel_path} (5 Tabs)")
+        # Tab 6: Complete Raw Scanned Universe (rajat_alpha_scanned_trade_log.csv)
+        trades_df.to_excel(writer, sheet_name="Scanned_Universe_Raw", index=False)
+    print(f"📗 Saved Master Multi-Tab Excel Workbook: {excel_path} (6 Tabs including Raw Scanned Universe)")
 
     # Plot 4 Comparative Curves Overlay
     plt.figure(figsize=(14, 7))

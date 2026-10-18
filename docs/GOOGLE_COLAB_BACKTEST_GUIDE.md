@@ -38,34 +38,36 @@ The backtest pipeline located in [`scripts/backtest_colab_pipeline.py`](file:///
 
 ---
 
-## 2. Quickstart: Run in Google Colab (2 Methods)
+## 2. Quickstart: Run in Google Colab (2 Easy Methods)
 
-### Method A: Single-Cell 1-Click Execution (RECOMMENDED - No File Upload Required)
+### Method 1: Upload the Ready Notebook (RECOMMENDED - 100% Offline & Reliable)
+A complete, pre-configured Google Colab notebook has been created in your repository at:  
+[`scripts/Rajat_Alpha_v67_Colab_Backtest.ipynb`](file:///C:/Alpaca_Algo2.0/Single_Buy2.0/scripts/Rajat_Alpha_v67_Colab_Backtest.ipynb)
+
+1. Open [colab.research.google.com](https://colab.research.google.com).
+2. In the modal that appears, click the **Upload** tab (or go to **File $\to$ Upload notebook**).
+3. Click **Browse** and select `C:\Alpaca_Algo2.0\Single_Buy2.0\scripts\Rajat_Alpha_v67_Colab_Backtest.ipynb`.
+4. In Google Colab, click **Runtime $\to$ Run all** (or press **Ctrl + F9**).
+5. All dependencies install automatically, data downloads, both simulations run, the comparison table prints, and all 4 interactive charts render inline!
+
+### Method 2: Copy & Paste into a Blank Notebook Cell
+If you prefer starting with a blank notebook:
 1. Open [colab.research.google.com](https://colab.research.google.com) and click **New Notebook**.
-2. In Cell 1, install dependencies and download the script directly:
-   ```python
-   # 1. Install dependencies
-   !pip install -q yfinance matplotlib pandas numpy tabulate
-   
-   # 2. Download or run the pipeline directly
-   !curl -s -O https://raw.githubusercontent.com/rajat-algo/Single_Buy2.0/feature/v67-institutional-upgrade/scripts/backtest_colab_pipeline.py
-   !python backtest_colab_pipeline.py
-   ```
-
-### Method B: Copy & Paste Directly into a Colab Notebook Cell
-If you prefer running without GitHub, simply:
-1. Open [`scripts/backtest_colab_pipeline.py`](file:///C:/Alpaca_Algo2.0/Single_Buy2.0/scripts/backtest_colab_pipeline.py) on your machine.
-2. Copy the entire file content (Ctrl+A, Ctrl+C).
-3. Paste directly into a blank cell in Google Colab.
-4. At the top of the cell, ensure:
+2. Open [`scripts/backtest_colab_pipeline.py`](file:///C:/Alpaca_Algo2.0/Single_Buy2.0/scripts/backtest_colab_pipeline.py) in any editor.
+3. Select All (`Ctrl+A`) and Copy (`Ctrl+C`).
+4. Paste (`Ctrl+V`) into the blank Colab code cell.
+5. In a small cell above it, run:
    ```python
    !pip install -q yfinance matplotlib pandas numpy tabulate
    ```
-5. Press **Shift + Enter** (or click the **Play** button).
+6. Click **Play** on both cells!
 
-> [!NOTE]
+> [!IMPORTANT]
 > **Why execution previously failed:**  
-> Running `!python scripts/backtest_colab_pipeline.py` in Colab failed because Colab's default root directory is `/content/` and does not contain a `scripts/` folder unless explicitly cloned. In addition, local console code-pages (such as Windows `cp1252`) crashed on raw emoji characters. Both issues have been resolved: the script now uses safe ASCII logging with automated UTF-8 stream reconfiguring and can be run directly from `/content/`.
+> 1. Running `!python scripts/backtest_colab_pipeline.py` failed because Colab's default root is `/content/` and does not contain a `scripts/` directory unless uploaded.
+> 2. Using `!curl ... raw.githubusercontent.com` failed because your repository is a local development directory (`C:\Alpaca_Algo2.0\Single_Buy2.0`) without a public remote origin, returning a 404 HTML document.
+> 3. Standard Windows shells (`cp1252`) crashed on raw emojis (`🚀`, `📊`) with `UnicodeEncodeError`.
+> All three issues have been resolved: we provided the direct `.ipynb` notebook file, eliminated external download requirements, and sanitized all terminal outputs.
 
 ---
 

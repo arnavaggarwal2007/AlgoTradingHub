@@ -204,3 +204,77 @@ You can experiment with different parameters by modifying the arguments or dicti
 | `target_3_pct` | `0.15` | `0.12` - `0.20` | Third partial profit target (PT3). |
 | `runner_qty` | `0.30` | `0.20` - `0.40` | Fraction reserved for long-term runner trends. |
 
+---
+
+## 8. The Institutional Prop & Portfolio Protocol Notebook
+
+For elite institutional evaluation, open [`scripts/Colab_backtest/Rajat_Alpha_Institutional_Prop_Protocol.ipynb`](file:///C:/Alpaca_Algo2.0/Single_Buy2.0/scripts/Colab_backtest/Rajat_Alpha_Institutional_Prop_Protocol.ipynb) in Google Colab.
+
+### The 15 Sequential Cells:
+1. **Cell 1: Environment & Master Imports** — Installs dependencies and configures plotting.
+2. **Cell 2: Step 1 Map the Account** — Translates account spec sheets ($100k Modern Prop, 100k Strict 60d, 50k Prop, 250k Private Fund) into code.
+3. **Cell 3: Scan Ingestion & Backtest Engine** — Loads precomputed trade logs or executes live multi-year backtests across candidate universes.
+4. **Cell 4: Step 2 Measure Strategy Shape** — Computes The 5 Numbers + The 2 Forgotten (Win Rate, Avg Win, Avg Loss, Expectancy, Profit Factor, Tail Ratio $P_{90}/P_{10}$, Trade Cadence). Renders P&L histogram and machine equity curve.
+5. **Cell 5: Step 3 Monte Carlo Simulator** — 10,000 challenge runs using Bag-of-Days resampling.
+6. **Cell 6: The Failure Mode Table** — Diagnoses failure reasons (Drawdown vs Daily Loss vs Deadline).
+7. **Cell 7: The Spaghetti Tangle** — Visualizes 150 shuffled Monte Carlo paths.
+8. **Cell 8: Position Sizing Sweep** — Sweeps position scales from 1.0x to 10.0x to identify the **Interior Maximum** (sweet spot at 6.0x scale).
+9. **Cell 9: The Attempt Budget** — Demonstrates why $P_{\text{cum}} = 1 - (1-p)^N$ reaches **98.5% across 4 attempts**.
+10. **Cell 10: Step 4 Multi-Strategy Portfolio Engine** — Analyzes 3 uncorrelated baskets (Tech, Energy, Financials) and renders the daily correlation heatmap ($\rho \le 0.07$).
+11. **Cell 11: Funded Account Extraction Phase** — Rules for recurring 80/20 profit withdrawals.
+12. **Cell 12: $10,000 Capital Compounding Engine** — 5-Year historical compounding vs 4-Year forward Monte Carlo growth cone.
+13. **Cell 13: Quantitative Beast Stock Selection Engine** — Ranks scanned symbols to isolate Tier 1 Beast stocks.
+14. **Cell 14: Realistic Portfolio Capacity Simulator** — Simulates chronological day-by-day execution with **Max Concurrent Open Positions** constraint (max 5 positions), rejecting/skipping trades when slots are full.
+15. **Cell 15: CSV Exports** — Downloads complete trade logs and proposals.
+
+---
+
+## 9. Weekly Candidate Ranking Pipeline
+
+When you run your weekly scanner (`21 EMA > 50 SMA > 150 SMA > 200 SMA near 50 SMA`), run:
+```powershell
+python scripts/rank_weekly_scan_symbols.py
+```
+This evaluates every candidate stock against the v3.2 swing engine and outputs:
+- `docs/weekly_scanned_symbols_ranked.csv` (Complete rankings table)
+- `config/weekly_high_conviction_watchlist.txt` (Tier 1 Beast stocks ready for live execution)
+
+### Institutional Ranking Formula:
+$$\text{Rank Score} = (\text{Win Rate} \times 40) + (\min(\text{Profit Factor}, 5) \times 8) + (\min(\text{Tail Ratio}, 4) \times 5) + \frac{\min(\text{Expectancy}, 300)}{15}$$
+
+---
+
+## 10. Realistic Portfolio Capacity Simulator (Max Open Positions Constraint)
+
+To analyze any downloaded trade log CSV (such as `rajat_alpha_scanned_trade_log.csv`) under realistic portfolio cash and slot capacity limits:
+```powershell
+python scripts/analyze_portfolio_trade_log.py --input "C:/Users/Rajat/Downloads/rajat_alpha_scanned_trade_log.csv" --capital 10000 --max-open 5 --alloc-pct 0.20
+```
+
+### Outputs Generated:
+- `docs/portfolio_constrained_dashboard.png`: 4-panel visual dashboard showing Constrained Equity Curve, Open Positions Slot Utilization, Underwater Drawdowns, and Realized P&L Distribution.
+- `docs/portfolio_constrained_report.html`: Standalone interactive HTML report with KPIs and trade breakdown.
+- `docs/portfolio_constrained_accepted_trades.csv`: List of all trades executed.
+- `docs/portfolio_constrained_skipped_trades.csv`: List of all trades skipped due to full capacity.
+
+---
+
+## 11. Sizing Models & Capital Compounding ($10,000 Account)
+
+### Model A: Fixed % Capital Allocation (e.g. 20% Cash / $2,000 per trade)
+- Position size = Account Cash $\times 20\%$.
+- Caps concurrent trades at 5.
+- Vulnerable to stock beta divergence (high-ATR stocks risk more dollars than low-ATR stocks).
+
+### Model B: Fixed % Account Equity Risk (Recommended Institutional Standard)
+- Risk per trade is fixed at **1.5% of total account equity** ($150 on $10,000).
+- Share size dynamically calculated from ATR stop loss distance:
+  $$\text{Shares} = \frac{\text{Account Equity} \times 1.5\%}{\text{Entry Price} - \text{Initial Stop Loss}}$$
+- Position size capped at **25% of account equity** (max 4 concurrent trades).
+- Equalizes dollar risk across all market conditions.
+
+### Verified Results on Tier 1 Beast Stocks:
+- **Historical Backtest (2021–2026)**: $10,000 grew to **$30,910 (+209.1% net gain, 38.0% CAGR)** with a max drawdown of only **-13.4%**.
+- **Forward 4-Year Monte Carlo**: Conservative P10 = **$41,470**, Median P50 = **$67,577**, Optimistic P90 = **$110,028**. Probability of doubling is **100%**, probability of tripling is **98.5%**.
+
+

@@ -1,0 +1,199 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Rajat Alpha v67 - Portfolio Execution Report</title>
+<style>
+  body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; background: #0B0F19; color: #E2E8F0; margin: 0; padding: 25px; }
+  h1, h2, h3 { color: #38BDF8; margin-bottom: 8px; }
+  .kpi-container { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 15px; margin: 25px 0; }
+  .kpi-card { background: #1E293B; padding: 18px; border-radius: 10px; border-left: 4px solid #38BDF8; }
+  .kpi-label { font-size: 12px; color: #94A3B8; text-transform: uppercase; letter-spacing: 0.5px; }
+  .kpi-value { font-size: 24px; font-weight: bold; margin-top: 6px; color: #F8FAFC; }
+  .kpi-sub { font-size: 12px; color: #10B981; margin-top: 4px; }
+  table { width: 100%; border-collapse: collapse; margin-top: 15px; background: #1E293B; border-radius: 8px; overflow: hidden; }
+  th, td { padding: 10px 14px; text-align: left; border-bottom: 1px solid #334155; font-size: 13px; }
+  th { background: #0F172A; color: #38BDF8; font-weight: 600; }
+  tr:hover { background: #334155; }
+  .badge-win { color: #10B981; font-weight: bold; }
+  .badge-loss { color: #EF4444; font-weight: bold; }
+  .img-box { margin: 25px 0; text-align: center; }
+  .img-box img { max-width: 100%; border-radius: 8px; border: 1px solid #334155; }
+</style>
+</head>
+<body>
+<h1>🏛️ Rajat Alpha v67: Portfolio Execution & Compounding Report</h1>
+<p style="color: #94A3B8;">Realistic Backtest Simulation Enforcing Max Concurrent Position Capacity & Daily Rebalance</p>
+
+<div class="kpi-container">
+  <div class="kpi-card">
+    <div class="kpi-label">Final Equity</div>
+    <div class="kpi-value">$12,913.27</div>
+    <div class="kpi-sub">+29.1% Total Net Gain</div>
+  </div>
+  <div class="kpi-card">
+    <div class="kpi-label">Annualized Return (CAGR)</div>
+    <div class="kpi-value">8.9% / yr</div>
+    <div class="kpi-sub">Compound Growth</div>
+  </div>
+  <div class="kpi-card">
+    <div class="kpi-label">Peak Drawdown</div>
+    <div class="kpi-value" style="color: #F87171;">-17.6%</div>
+    <div class="kpi-sub">Risk Floor Intact</div>
+  </div>
+  <div class="kpi-card">
+    <div class="kpi-label">Win Rate / PF</div>
+    <div class="kpi-value">47.8%</div>
+    <div class="kpi-sub">Profit Factor: 1.28</div>
+  </div>
+  <div class="kpi-card">
+    <div class="kpi-label">Trade Execution Ratio</div>
+    <div class="kpi-value">159 / 415</div>
+    <div class="kpi-sub">256 Skipped (Capacity Full)</div>
+  </div>
+</div>
+
+<div class="img-box">
+  <img src="portfolio_constrained_dashboard.png" alt="Portfolio Performance Dashboard">
+</div>
+
+<h2>🏆 Top Performing Executed Trades</h2>
+<table>
+  <thead>
+    <tr>
+      <th>Symbol</th><th>Entry Date</th><th>Exit Date</th><th>Hold Days</th><th>Return (%)</th><th>Realized PnL ($)</th><th>Exit Reason</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td><b>CNK</b></td>
+      <td>2024-05-17</td>
+      <td>2024-12-09</td>
+      <td>141</td>
+      <td class="badge-win">+33.62%</td>
+      <td class="badge-win">+$672.68</td>
+      <td>Stop Loss (Trailing/Stepper)</td>
+    </tr>
+    <tr>
+      <td><b>ZETA</b></td>
+      <td>2024-06-21</td>
+      <td>2024-08-02</td>
+      <td>29</td>
+      <td class="badge-win">+21.29%</td>
+      <td class="badge-win">+$443.91</td>
+      <td>Stop Loss (Trailing/Stepper)</td>
+    </tr>
+    <tr>
+      <td><b>AMG</b></td>
+      <td>2025-07-15</td>
+      <td>2026-02-05</td>
+      <td>142</td>
+      <td class="badge-win">+22.29%</td>
+      <td class="badge-win">+$416.63</td>
+      <td>Stop Loss (Trailing/Stepper)</td>
+    </tr>
+    <tr>
+      <td><b>VRNS</b></td>
+      <td>2023-10-20</td>
+      <td>2024-02-21</td>
+      <td>83</td>
+      <td class="badge-win">+20.95%</td>
+      <td class="badge-win">+$409.18</td>
+      <td>Stop Loss (Trailing/Stepper)</td>
+    </tr>
+    <tr>
+      <td><b>ZETA</b></td>
+      <td>2024-04-15</td>
+      <td>2024-05-30</td>
+      <td>32</td>
+      <td class="badge-win">+20.19%</td>
+      <td class="badge-win">+$409.11</td>
+      <td>Stop Loss (Trailing/Stepper)</td>
+    </tr>
+    <tr>
+      <td><b>PCVX</b></td>
+      <td>2023-11-07</td>
+      <td>2024-02-29</td>
+      <td>77</td>
+      <td class="badge-win">+21.17%</td>
+      <td class="badge-win">+$403.49</td>
+      <td>Stop Loss (Trailing/Stepper)</td>
+    </tr>
+    <tr>
+      <td><b>NTRA</b></td>
+      <td>2025-10-03</td>
+      <td>2026-01-16</td>
+      <td>72</td>
+      <td class="badge-win">+18.56%</td>
+      <td class="badge-win">+$399.57</td>
+      <td>Stop Loss (Trailing/Stepper)</td>
+    </tr>
+    <tr>
+      <td><b>CLMT</b></td>
+      <td>2026-01-16</td>
+      <td>2026-02-27</td>
+      <td>28</td>
+      <td class="badge-win">+16.88%</td>
+      <td class="badge-win">+$387.78</td>
+      <td>Stop Loss (Trailing/Stepper)</td>
+    </tr>
+  </tbody>
+</table>
+
+<h2 style="margin-top: 30px;">🛡️ Largest Mitigated Losses (Trailing Stepper Protection)</h2>
+<table>
+  <thead>
+    <tr>
+      <th>Symbol</th><th>Entry Date</th><th>Exit Date</th><th>Hold Days</th><th>Return (%)</th><th>Realized PnL ($)</th><th>Exit Reason</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td><b>OKTA</b></td>
+      <td>2026-10-15</td>
+      <td>2026-10-16</td>
+      <td>1</td>
+      <td class="badge-loss">-10.35%</td>
+      <td class="badge-loss">-$265.29</td>
+      <td>Stop Loss (Initial SL)</td>
+    </tr>
+    <tr>
+      <td><b>DDOG</b></td>
+      <td>2025-11-20</td>
+      <td>2025-12-15</td>
+      <td>16</td>
+      <td class="badge-loss">-11.13%</td>
+      <td class="badge-loss">-$253.43</td>
+      <td>Stop Loss (Initial SL)</td>
+    </tr>
+    <tr>
+      <td><b>APPN</b></td>
+      <td>2026-09-04</td>
+      <td>2026-09-08</td>
+      <td>1</td>
+      <td class="badge-loss">-10.03%</td>
+      <td class="badge-loss">-$249.05</td>
+      <td>Stop Loss (Initial SL)</td>
+    </tr>
+    <tr>
+      <td><b>DK</b></td>
+      <td>2025-07-25</td>
+      <td>2025-08-06</td>
+      <td>8</td>
+      <td class="badge-loss">-11.83%</td>
+      <td class="badge-loss">-$243.29</td>
+      <td>Stop Loss (Initial SL)</td>
+    </tr>
+    <tr>
+      <td><b>NTRA</b></td>
+      <td>2025-02-26</td>
+      <td>2025-03-03</td>
+      <td>3</td>
+      <td class="badge-loss">-11.02%</td>
+      <td class="badge-loss">-$238.42</td>
+      <td>Stop Loss (Initial SL)</td>
+    </tr>
+  </tbody>
+</table>
+</body>
+</html>

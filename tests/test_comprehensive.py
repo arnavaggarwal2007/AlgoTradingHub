@@ -1,5 +1,7 @@
 import sys
 import os
+if hasattr(sys.stdout, 'reconfigure'):
+    sys.stdout.reconfigure(encoding='utf-8')
 # Add parent directory to path to import the bot module
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from rajat_alpha_v67_single import PositionManager, ConfigManager, PositionDatabase

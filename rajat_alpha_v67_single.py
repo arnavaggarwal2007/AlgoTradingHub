@@ -9,15 +9,16 @@ VERSION: 3.2 (Production Institutional Grade)
 DATE: October 17, 2026
 
 CORE STRATEGY & RISK MANAGEMENT LOGIC:
-1. Signal Generation Pipeline (7 Sequential Gating Checks):
-   - Check 1: Market Structure (50 SMA > 200 SMA, 21 EMA >= 50 SMA - 2.5% tolerance)
-   - Check 2: Multi-Timeframe Alignment (Weekly Close > Weekly EMA21, Monthly Close > Monthly EMA10)
-   - Check 3: Preceding Impulse Wave & Orderly Retracement (Swing High >= 5% above EMA21 within 20 bars, retracing >= 3%)
-   - Check 4: Pattern Confirmation (Engulfing, Piercing, Tweezer, Hammer, Upside Reversal) OR Qualified Touch
-   - Check 5: Stalling Filter (Rejects horizontal consolidation churn < 5% range over 8 days)
-   - Check 6: Extended Stock Filter (Gap up < 4%, Green session required)
-   - Check 6.75: Shooting Star Rejection Filter (Upper wick > 50% of range indicates seller distribution; mandatory)
-   - Check 7: Conviction Score (RSI>50, MTF, Volume, Demand Zone, Touch Bonuses, RS Bonus >= 4.0)
+1. Signal Generation Pipeline (Prioritized Institutional Cascade):
+   - Gate 0: Market Regime Gate (SPY & QQQ > 50 SMA when enabled)
+   - Gate 1 & 1.5: Market Structure & Regime-Adaptive Slope (EMA21 > SMA50 > SMA200, Close > SMA200)
+   - Gate 2: Preceding Impulse Wave & Orderly Retracement (Swing High >= 5% above EMA21 within 20 bars, retracing >= 3%)
+   - Gate 3: Pattern Confirmation (Engulfing, Piercing, Tweezer, Hammer, Upside Reversal) OR Qualified Touch
+   - Gate 4: Weekly MTF Trend Gate (Weekly Close > Weekly EMA21; mandatory prerequisite)
+   - Gate 5: Demand Zone Proximity (Low <= 21-day Low * 1.035)
+   - Gate 6: Exhaustion Filters (Shooting Star Rejection, Stalling < 5% 8d range, Extension Gap > 4%)
+   - Informational: IBD-Style RS Composite Rating (0–100) displayed in console/audit logs and DB (not added to score)
+   - Gate 7: Conviction Score (Total out of 7.0: Pattern + Weekly + Demand + RSI>50 + Monthly + Volume + Touch State >= 4.0)
    - Special: Touch-Only Dual Gate (Requires Score >= 5.0 AND Bullish Real Body >= 50% closing in upper third)
 
 2. Risk Management & Execution Architecture:

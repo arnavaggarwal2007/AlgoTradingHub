@@ -569,3 +569,4 @@ def run_scanned_universe_audit(csv_path):
 if __name__ == '__main__':
     csv_file = r"C:\Users\Rajat\Downloads\Up_trend_Price near 50SMA 10_20_50_150_200_2026-10-18_2daf7.csv"
     run_scanned_universe_audit(csv_file)
+

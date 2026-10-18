@@ -171,3 +171,4 @@ You can experiment with different parameters by modifying the arguments or dicti
 | `target_2_pct` | `0.10` | `0.08` - `0.12` | Second partial profit target (PT2). |
 | `target_3_pct` | `0.15` | `0.12` - `0.20` | Third partial profit target (PT3). |
 | `runner_qty` | `0.30` | `0.20` - `0.40` | Fraction reserved for long-term runner trends. |
+

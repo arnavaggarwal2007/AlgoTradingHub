@@ -281,13 +281,17 @@ def run_backtest_simulation(all_data: Dict[str, pd.DataFrame], qqq_df: pd.DataFr
             
             # --- V32 LOGIC ---
             if mode == "v32":
-                # Multi-stage trailing SL
+                # Multi-stage trailing SL (with Stage 2 +1% and Stage 3 +5% extension ratchet)
                 gain_pct = (high_px - t.entry_price) / t.entry_price
-                if gain_pct >= 0.10:
-                    t.stop_loss = max(t.stop_loss, t.entry_price * (1.03 + (gain_pct - 0.10)))
+                if gain_pct >= 0.15:
+                    ratchet = 0.10 + (gain_pct - 0.15)
+                    t.stop_loss = max(t.stop_loss, t.entry_price * (1.0 + ratchet))
+                    t.sl_stage = 4
+                elif gain_pct >= 0.10:
+                    t.stop_loss = max(t.stop_loss, t.entry_price * 1.03)
                     t.sl_stage = 3
                 elif gain_pct >= 0.08:
-                    t.stop_loss = max(t.stop_loss, t.entry_price)
+                    t.stop_loss = max(t.stop_loss, t.entry_price * 1.01) # +1% above entry price
                     t.sl_stage = 2
                 elif gain_pct >= 0.05:
                     t.stop_loss = max(t.stop_loss, t.entry_price * 0.96)
@@ -313,10 +317,11 @@ def run_backtest_simulation(all_data: Dict[str, pd.DataFrame], qqq_df: pd.DataFr
                     t.partial_exits.add('PT3')
                     t.is_runner = True  # Remaining 30% enters runner mode
                     
-                # Dynamic TES Evaluation
-                if t.bars_held >= t.max_hold_bars and not t.is_runner:
-                    # Grant 10-day extension if consolidating above EMA21
-                    if close_px > bar['EMA21'] and (close_px - t.entry_price)/t.entry_price > -0.05:
+                # Dynamic TES Evaluation (checks effective limit)
+                effective_limit = t.max_hold_bars
+                if t.bars_held >= effective_limit and not t.is_runner:
+                    # Grant 10-day extension if consolidating constructively above EMA21
+                    if t.sl_stage < 2 and close_px > bar['EMA21'] and (close_px - t.entry_price)/t.entry_price > -0.05:
                         t.max_hold_bars += 10
                     else:
                         # TES Exit at confirmed close
@@ -376,7 +381,14 @@ def run_backtest_simulation(all_data: Dict[str, pd.DataFrame], qqq_df: pd.DataFr
                     atr = details['atr']
                     init_sl = entry_px - (2.0 * atr) if atr > 0 else entry_px * 0.83
                     init_sl = max(entry_px * 0.83, min(entry_px * 0.95, init_sl))
-                    shares = max(1, int(3000.0 / entry_px))
+                    
+                    # Position Sizing: Fixed fractional risk vs fixed allocation
+                    # Method: Risk 0.5% equity ($500) per trade based on SL distance
+                    dollar_risk = 500.0
+                    risk_per_share = max(0.50, entry_px - init_sl)
+                    shares = max(1, int(dollar_risk / risk_per_share))
+                    # Bound to max 6% allocation ($6,000)
+                    shares = min(shares, max(1, int(6000.0 / entry_px)))
                     open_trades.append(Trade(sym, dt, entry_px, init_sl, shares, is_v32=True))
             else:
                 # Old baseline: looser entry, 17% fixed SL, market order slippage

@@ -1321,30 +1321,59 @@ class PositionManager:
         target_sl = current_sl
         new_stage = position.get('sl_stage', 0)
         
-        stepper_mode = self.config.get('risk_management', 'stepper_mode', 'user_fixed')
+        stepper_mode = str(self.config.get('risk_management', 'stepper_mode', 'user_fixed')).lower()
         
-        if stepper_mode == 'user_fixed':
-            if profit_pct >= 0.10:
-                ratchet = 0.03 + (profit_pct - 0.10)
+        # Adaptive ATR Hybrid Mode: chooses user_fixed vs atr_proportional dynamically
+        if stepper_mode == 'adaptive_atr_hybrid':
+            init_sl = position.get('initial_stop_loss') or (entry_price * 0.83)
+            init_risk_pct = (entry_price - init_sl) / entry_price if entry_price > 0 else 0.17
+            # High-volatility stock (>8% initial stop distance) gets ATR breathing room; low-vol gets fixed milestones
+            active_mode = 'atr_proportional' if init_risk_pct > 0.08 else 'user_fixed'
+        else:
+            active_mode = stepper_mode
+
+        # Configurable Stage Thresholds
+        s1_gain = self.config.get('risk_management', 'stepper_stage_1_gain', 0.05)
+        s1_sl_pct = self.config.get('risk_management', 'stepper_stage_1_sl_pct', -0.04)
+        s2_gain = self.config.get('risk_management', 'stepper_stage_2_gain', 0.08)
+        s2_sl_pct = self.config.get('risk_management', 'stepper_stage_2_sl_pct', 0.01) # +1.0% above entry
+        s3_gain = self.config.get('risk_management', 'stepper_stage_3_gain', 0.10)
+        s3_sl_pct = self.config.get('risk_management', 'stepper_stage_3_sl_pct', 0.03) # +3.0% locked in
+        s3_extension_ratchet_gain = s3_gain + 0.05 # +5% above Stage 3 (e.g. +15% total gain)
+
+        if active_mode == 'user_fixed':
+            # Stage 3 Extension Ratchet: If price moves +5% above Stage 3, SL moves to Stage 3 level (+10%) and ratchets 1:1
+            if profit_pct >= (s3_extension_ratchet_gain - 0.0001):
+                ratchet = s3_gain + (profit_pct - s3_extension_ratchet_gain)
                 target_sl = entry_price * (1.0 + ratchet)
+                new_stage = 4
+            elif profit_pct >= (s3_gain - 0.0001):
+                # Stage 3: Lock in Stage 3 profit (+3% or configured s3_sl_pct)
+                target_sl = entry_price * (1.0 + s3_sl_pct)
                 new_stage = 3
-            elif profit_pct >= 0.08:
-                target_sl = entry_price
+            elif profit_pct >= (s2_gain - 0.0001):
+                # Stage 2: Move SL to +1% higher than buy price (locks in net positive profit)
+                target_sl = entry_price * (1.0 + s2_sl_pct)
                 new_stage = 2
-            elif profit_pct >= 0.05:
-                target_sl = entry_price * (1.0 - 0.04)
+            elif profit_pct >= (s1_gain - 0.0001):
+                # Stage 1: Move SL to -4% below entry (cuts risk from -17% to -4%)
+                target_sl = entry_price * (1.0 + s1_sl_pct)
                 new_stage = 1
         else:
-            # ATR proportional stepper
+            # ATR Proportional Stepper (Volatility Normalized)
             init_sl = position.get('initial_stop_loss') or (entry_price * 0.83)
             risk_d = entry_price - init_sl
-            if profit_pct >= 0.10:
-                target_sl = entry_price + (risk_d * 0.18) + (entry_price * (profit_pct - 0.10))
+            if profit_pct >= (s3_extension_ratchet_gain - 0.0001):
+                ratchet_pts = s3_gain + (profit_pct - s3_extension_ratchet_gain)
+                target_sl = entry_price * (1.0 + ratchet_pts)
+                new_stage = 4
+            elif profit_pct >= (s3_gain - 0.0001):
+                target_sl = entry_price + (risk_d * 0.20)
                 new_stage = 3
-            elif profit_pct >= 0.08:
-                target_sl = entry_price
+            elif profit_pct >= (s2_gain - 0.0001):
+                target_sl = entry_price * (1.0 + s2_sl_pct) # Also guarantees +1% above entry
                 new_stage = 2
-            elif profit_pct >= 0.05:
+            elif profit_pct >= (s1_gain - 0.0001):
                 target_sl = entry_price - (risk_d * 0.25)
                 new_stage = 1
 
@@ -1623,16 +1652,56 @@ class RajatAlphaTradingBot:
 
     def process_manual_overrides(self):
         """
-        Processes manual position overrides from config.json:
-        - Target specific stock by 'symbol' (e.g. 'AAPL') or specific 'position_id'.
-        - Never affects other portfolio positions.
-        - Supported Actions:
-            1. 'FORCE_SELL' / 'FORCE_CLOSE': Submits market sell order to Alpaca AND cleanly closes record in DB.
-            2. 'UPDATE_STOP_LOSS': Updates stop_loss in DB for targeted position.
-            3. 'EXTEND_TES': Grants dynamic TES extension (+10 days) in DB for targeted position.
-        - Records in processed_overrides table to ensure idempotent single execution.
+        Processes manual position overrides from:
+        1. config/selllist.txt (Fast 1-line format: 'AAPL', 'AAPL:SL:145.50', 'AAPL:TES:10')
+        2. config.json 'manual_position_overrides' (JSON array)
+        Actions: 'FORCE_SELL', 'UPDATE_STOP_LOSS', 'EXTEND_TES'.
         """
-        overrides = self.config.get('manual_position_overrides', [])
+        # Collect overrides from:
+        # 1. config/selllist.txt (Fast, clean 1-line emergency overrides)
+        # 2. config.json "manual_position_overrides" (Optional JSON array)
+        overrides = []
+        
+        # 1. Parse selllist.txt
+        selllist_path = self.config.get('trading_rules', 'sell_watchlist_file', 'config/selllist.txt')
+        if os.path.exists(selllist_path):
+            try:
+                with open(selllist_path, 'r') as f:
+                    for line in f:
+                        line = line.strip()
+                        if not line or line.startswith('#'):
+                            continue
+                        parts = [p.strip() for p in line.split(':')]
+                        sym = parts[0].upper()
+                        act = parts[1].upper() if len(parts) > 1 else 'FORCE_SELL'
+                        param = parts[2].strip() if len(parts) > 2 else None
+                        
+                        entry = {'symbol': sym, 'action': act}
+                        if act in ['SL', 'UPDATE_STOP_LOSS', 'STOP_LOSS'] and param:
+                            entry['action'] = 'UPDATE_STOP_LOSS'
+                            try:
+                                entry['new_stop_loss'] = float(param)
+                            except ValueError:
+                                pass
+                        elif act in ['TES', 'EXTEND_TES'] and param:
+                            entry['action'] = 'EXTEND_TES'
+                            try:
+                                entry['extend_days'] = int(param)
+                            except ValueError:
+                                pass
+                        elif act in ['FORCE_SELL', 'SELL', 'EXIT', 'FORCE_CLOSE']:
+                            entry['action'] = 'FORCE_SELL'
+                            if param:
+                                entry['exit_reason'] = param
+                        overrides.append(entry)
+            except Exception as e:
+                logger.error(f"Error parsing {selllist_path}: {e}")
+
+        # 2. Append JSON overrides from config.json (if present)
+        cfg_overrides = self.config.get('manual_position_overrides', [])
+        if isinstance(cfg_overrides, list):
+            overrides.extend(cfg_overrides)
+
         for item in overrides:
             if not isinstance(item, dict): 
                 continue

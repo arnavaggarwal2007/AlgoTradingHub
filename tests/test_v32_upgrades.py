@@ -167,10 +167,10 @@ class TestRajatAlphaV32Upgrades(unittest.TestCase):
         self.assertEqual(pos['stop_loss'], 96.0)
         self.assertEqual(pos['sl_stage'], 1)
         
-        # 3. Stock hits $108 (+8% gain) -> SL moves to $100.00 (Breakeven)
+        # 3. Stock hits $108 (+8% gain) -> SL moves to $101.00 (+1% above buy price)
         pm.update_trailing_stop_loss(pos, 108.0)
         pos = self.db.get_position_by_id(pos_id)
-        self.assertEqual(pos['stop_loss'], 100.0)
+        self.assertEqual(pos['stop_loss'], 101.0)
         self.assertEqual(pos['sl_stage'], 2)
         
         # 4. Stock hits $110 (+10% gain) -> SL moves to $103.00 (+3% locked)
@@ -179,15 +179,16 @@ class TestRajatAlphaV32Upgrades(unittest.TestCase):
         self.assertEqual(pos['stop_loss'], 103.0)
         self.assertEqual(pos['sl_stage'], 3)
         
-        # 5. Stock hits $115 (+15% gain) -> SL ratchets to $108.00 (+8% locked)
+        # 5. Stock hits $115 (+15% gain = +5% above Stage 3) -> SL ratchets to Stage 3 level ($110.00 locked in)
         pm.update_trailing_stop_loss(pos, 115.0)
         pos = self.db.get_position_by_id(pos_id)
-        self.assertEqual(pos['stop_loss'], 108.0)
+        self.assertEqual(pos['stop_loss'], 110.0)
+        self.assertEqual(pos['sl_stage'], 4)
         
         # 6. Monotonicity Test: Price drops back to $106 -> SL must NEVER decrease
         pm.update_trailing_stop_loss(pos, 106.0)
         pos = self.db.get_position_by_id(pos_id)
-        self.assertEqual(pos['stop_loss'], 108.0)
+        self.assertEqual(pos['stop_loss'], 110.0)
 
     # =========================================================================
     # 5. FOUR-TIER PARTIAL EXITS & RUNNER PROTOCOL

@@ -104,7 +104,7 @@
     "stepper_stage_1_gain": 0.05,
     "stepper_stage_1_sl_pct": -0.04,
     "stepper_stage_2_gain": 0.08,
-    "stepper_stage_2_sl_pct": 0.00,
+    "stepper_stage_2_sl_pct": 0.01,
     "stepper_stage_3_gain": 0.10,
     "stepper_stage_3_sl_pct": 0.03,
     "trailing_ratchet_per_pct": 0.01,

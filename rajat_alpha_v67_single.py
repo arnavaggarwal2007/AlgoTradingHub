@@ -1478,31 +1478,39 @@ class PositionManager:
         """
         Dynamic Structural TES Engine (Minervini/Ryan consolidation extension):
         - Runners (is_runner=1) are completely exempt from TES.
-        - If days held >= max_hold_days, checks if position is holding constructively > EMA21.
-        - Grants 10-day extension if setup is healthy instead of dumping into dead money.
+        - Base holding period: max_hold_days (e.g. 21, 31, etc.)
+        - Effective limit: max_hold_days + (cur_ext * tes_extension_days)
+        - If days held >= effective limit:
+            - If eligible for extension (cur_ext < max_ext) and holding constructively >= 21 EMA:
+                grants dynamic extension (+10 days).
+            - Otherwise: returns True (time exit triggered).
         """
         if position.get('is_runner', 0) == 1:
             return False
             
-        max_hold_days = self.config.get('risk_management', 'max_hold_days', 21)
+        base_days = self.config.get('risk_management', 'max_hold_days', 21)
+        ext_days = self.config.get('risk_management', 'tes_extension_days', 10)
+        max_ext = self.config.get('risk_management', 'max_tes_extensions', 2)
+        cur_ext = position.get('tes_extensions_count', 0)
+        
+        effective_limit = base_days + (cur_ext * ext_days)
         days_held = self.db.get_days_held(position['id'])
         
-        if days_held < max_hold_days:
+        if days_held < effective_limit:
             return False
             
         # Check dynamic structural extension
-        if self.config.get('risk_management', 'enable_dynamic_tes_extension', True):
-            max_ext = self.config.get('risk_management', 'max_tes_extensions', 2)
-            cur_ext = position.get('tes_extensions_count', 0)
-            
-            if cur_ext < max_ext and df is not None and len(df) >= 21:
+        if self.config.get('risk_management', 'enable_dynamic_tes_extension', True) and cur_ext < max_ext:
+            if df is not None and len(df) >= 21:
                 curr_close = df['close'].iloc[-1]
                 ema21 = df['EMA21'].iloc[-1]
                 
-                # If price is holding above 21 EMA constructively, extend!
+                # If price is holding above 21 EMA constructively (within 1% tolerance), extend!
                 if curr_close >= (ema21 * 0.99):
-                    self.db.grant_tes_extension(position['id'], "Constructive base holding >= 21 EMA")
-                    logger.info(f"[{position['symbol']}] 🎯 DYNAMIC TES EXTENSION GRANTED (+10 days): Maturing base above EMA21.")
+                    new_ext = cur_ext + 1
+                    reason = f"Constructive base holding >= 21 EMA (Extension {new_ext}/{max_ext})"
+                    self.db.grant_tes_extension(position['id'], reason)
+                    logger.info(f"[{position['symbol']}] 🎯 DYNAMIC TES EXTENSION {new_ext}/{max_ext} GRANTED (+{ext_days} days to {effective_limit + ext_days} days): Maturing base above EMA21.")
                     return False
                     
         return True
@@ -1614,26 +1622,63 @@ class RajatAlphaTradingBot:
         return start <= now <= end
 
     def process_manual_overrides(self):
-        """Processes manual force-close overrides from config.json cleanly in SQLite"""
+        """
+        Processes manual position overrides from config.json:
+        - Target specific stock by 'symbol' (e.g. 'AAPL') or specific 'position_id'.
+        - Never affects other portfolio positions.
+        - Supported Actions:
+            1. 'FORCE_SELL' / 'FORCE_CLOSE': Submits market sell order to Alpaca AND cleanly closes record in DB.
+            2. 'UPDATE_STOP_LOSS': Updates stop_loss in DB for targeted position.
+            3. 'EXTEND_TES': Grants dynamic TES extension (+10 days) in DB for targeted position.
+        - Records in processed_overrides table to ensure idempotent single execution.
+        """
         overrides = self.config.get('manual_position_overrides', [])
         for item in overrides:
-            if not isinstance(item, dict): continue
-            override_id = str(item.get('position_id') or item.get('symbol'))
-            if item.get('processed', False) or self.db.is_override_processed(override_id):
+            if not isinstance(item, dict): 
                 continue
                 
             symbol = item.get('symbol')
             pos_id = item.get('position_id')
-            action = item.get('action', 'FORCE_CLOSE')
-            exit_px = item.get('exit_price') or self.data_fetcher.get_current_price(symbol) or 0.0
-            reason = item.get('exit_reason', 'Manual Position Override')
+            action = str(item.get('action', 'FORCE_SELL')).upper()
+            override_id = str(pos_id or symbol) + "_" + action
             
-            # Match position
-            pos = self.db.get_position_by_id(pos_id) if pos_id else (self.db.get_open_positions(symbol)[0] if self.db.get_open_positions(symbol) else None)
-            if pos:
-                self.db.close_position(pos['id'], exit_px, reason)
-                self.db.record_processed_override(override_id, symbol, pos['id'], action, exit_px, pos['remaining_qty'], reason)
-                logger.info(f"[MANUAL OVERRIDE] Position {pos['id']} ({symbol}) cleanly closed in DB at ${exit_px:.2f} ({reason})")
+            if item.get('processed', False) or self.db.is_override_processed(override_id):
+                continue
+                
+            # Target specific position
+            pos = None
+            if pos_id:
+                pos = self.db.get_position_by_id(pos_id)
+            elif symbol:
+                open_syms = self.db.get_open_positions(symbol)
+                pos = open_syms[0] if open_syms else None
+                
+            if not pos:
+                continue
+                
+            current_px = self.data_fetcher.get_current_price(pos['symbol']) or pos['entry_price']
+            reason = item.get('exit_reason') or item.get('reason') or f"Manual Override: {action}"
+            
+            if action in ['FORCE_SELL', 'FORCE_CLOSE']:
+                logger.info(f"[MANUAL OVERRIDE] Triggering live full exit for {pos['symbol']} (Position ID {pos['id']})")
+                self.position_manager.execute_full_exit(pos, current_px, reason)
+                self.db.record_processed_override(override_id, pos['symbol'], pos['id'], action, current_px, pos['remaining_qty'], reason)
+                logger.info(f"[MANUAL OVERRIDE] Successfully executed and recorded {action} for {pos['symbol']} at ${current_px:.2f}")
+                
+            elif action == 'UPDATE_STOP_LOSS':
+                new_sl = item.get('new_stop_loss') or item.get('stop_loss')
+                if new_sl is not None:
+                    new_sl_val = float(new_sl)
+                    self.db.update_stop_loss(pos['id'], new_sl_val)
+                    self.db.record_processed_override(override_id, pos['symbol'], pos['id'], action, new_sl_val, pos['remaining_qty'], reason)
+                    logger.info(f"[MANUAL OVERRIDE] Position {pos['id']} ({pos['symbol']}) Stop Loss manually updated to ${new_sl_val:.2f}")
+                    
+            elif action == 'EXTEND_TES':
+                ext_days = item.get('extend_days', 10)
+                reason_note = f"Manual TES extension (+{ext_days} days): {reason}"
+                self.db.grant_tes_extension(pos['id'], reason_note)
+                self.db.record_processed_override(override_id, pos['symbol'], pos['id'], action, current_px, pos['remaining_qty'], reason_note)
+                logger.info(f"[MANUAL OVERRIDE] Position {pos['id']} ({pos['symbol']}) TES extended (+{ext_days} days)")
 
     def run_sell_guardian(self):
         """Monitors open positions for stop-loss, profit-taking, and structural TES"""

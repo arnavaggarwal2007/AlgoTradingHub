@@ -1,5 +1,5 @@
 //@version=6
-indicator("Rajat Alpha v67 Single Buy Enhanced (US - Python-Synced v3.2)", overlay=true, max_boxes_count=500, max_labels_count=500, max_lines_count=500)
+indicator("Rajat Alpha v67 Single Buy v3.2 (Institutional Swing Engine)", overlay=true, max_boxes_count=500, max_labels_count=500, max_lines_count=500)
 
 // ================================================================================================
 // RAJAT ALPHA V67 (VERSION 3.2) - INSTITUTIONAL TRADINGVIEW ENGINE

@@ -55,3 +55,4 @@ python scripts/scanner/signal_dashboard.py --date 2026-10-16
 # Watch mode (auto-refreshes terminal every 60 seconds during market hours)
 python scripts/scanner/signal_dashboard.py --watch
 ```
+

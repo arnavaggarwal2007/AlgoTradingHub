@@ -67,3 +67,4 @@ Or generate high-conviction candidates using the automated scanner:
 ```bash
 python scripts/scanner/rank_weekly_scan_symbols.py
 ```
+

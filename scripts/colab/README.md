@@ -65,3 +65,4 @@ The output file is saved to `docs/rajat_alpha_4_configs_master_simulation.xlsx` 
 4. Cells 1–15 will execute sequentially, rendering all interactive plots, probability distributions, equity curves, and automatically providing direct download buttons for:
    - `rajat_alpha_scanned_trade_log.csv` (complete raw trade log)
    - `rajat_alpha_4_configs_master_simulation.xlsx` (5-tab master workbook)
+

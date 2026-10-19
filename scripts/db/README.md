@@ -53,3 +53,4 @@ python scripts/db/cleanup_db.py --vacuum
 ## Safety & Best Practices
 - These scripts automatically locate `db/positions.db` relative to the repository root, so they can be run from any current working directory.
 - Always execute `check_positions.py` before starting the trading bot to ensure your local ledger matches Alpaca broker reality.
+

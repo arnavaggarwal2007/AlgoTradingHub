@@ -38,3 +38,4 @@ Built using ReportLab with a custom two-pass canvas (`NumberedCanvas`) for runni
 python scripts/reporting/generate_executive_pdf.py
 ```
 *Output File*: `docs/Rajat_Alpha_v67_Executive_Summary.pdf`
+

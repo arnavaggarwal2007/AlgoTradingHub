@@ -1,8 +1,8 @@
 {
   "api": {
-    "key_id": "PKXP3QE2EM5EHCFSBF7K27VENG",
-    "secret_key": "NBcjFcXmEks8kpDwm81Srf6mWQSszU4aB3qxgz54UH6",
-    "base_url": "https://paper-api.alpaca.markets"
+    "key_id": "",
+    "secret_key": "",
+    "base_url": ""
   },
   "trading_rules": {
     "max_open_positions": 15,

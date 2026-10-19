@@ -38,3 +38,4 @@ This directory is the central knowledge repository for **Rajat Alpha v67 (Versio
 - `prop_simulation_protocol_dashboard.png`: 6-panel institutional Monte Carlo distribution and pass-rate curve.
 - `portfolio_constrained_dashboard.png`: Equity growth, drawdown curves, and monthly return heatmaps under 15-position slot constraints.
 - `configurations_comparison_chart.png`: 4-configuration comparative bar chart (Final Equity, Sharpe Ratio, Max Drawdown).
+

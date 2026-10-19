@@ -33,3 +33,4 @@ python tools/log_dashboard.py
 
 ## Retention Policy
 When log files exceed 100 MB, rotate the file by moving historical chunks to `backup/logs/`.
+

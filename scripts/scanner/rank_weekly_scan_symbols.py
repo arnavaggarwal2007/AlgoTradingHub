@@ -19,6 +19,8 @@ import yfinance as yf
 if hasattr(sys.stdout, 'reconfigure'):
     sys.stdout.reconfigure(encoding='utf-8')
 
+PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
 WEEKLY_SCAN_SYMBOLS = [
     "CLBK", "IRDM", "CNO", "MET", "NBTB", "S", "HNGE", "HSIC", "KNSA", "NSIT",
     "LFST", "RGS", "ELF", "FROG", "U", "ANET", "CNK", "PAGP", "CHEF", "GEO",
@@ -368,18 +370,21 @@ def main():
     print(",".join(tier1_beasts))
     
     # Save ranked CSV
-    stats_df.to_csv("docs/weekly_scanned_symbols_ranked.csv", index=False)
-    print("\n📁 Saved complete rankings: docs/weekly_scanned_symbols_ranked.csv")
+    ranked_csv_path = os.path.join(PROJECT_ROOT, "docs", "weekly_scanned_symbols_ranked.csv")
+    stats_df.to_csv(ranked_csv_path, index=False)
+    print(f"\n📁 Saved complete rankings: {ranked_csv_path}")
     
     # Save watchlist
-    with open("config/weekly_high_conviction_watchlist.txt", "w") as f:
+    watchlist_path = os.path.join(PROJECT_ROOT, "config", "weekly_high_conviction_watchlist.txt")
+    with open(watchlist_path, "w") as f:
         f.write(",".join(tier1_beasts) + "\n")
-    print("📁 Saved watchlist: config/weekly_high_conviction_watchlist.txt")
+    print(f"📁 Saved watchlist: {watchlist_path}")
     
     # Save trade log
     trades_df = pd.DataFrame(all_trades)
-    trades_df.to_csv("docs/weekly_scan_all_trades.csv", index=False)
-    print(f"📁 Saved all {len(trades_df)} historical trades: docs/weekly_scan_all_trades.csv")
+    trades_csv_path = os.path.join(PROJECT_ROOT, "docs", "weekly_scan_all_trades.csv")
+    trades_df.to_csv(trades_csv_path, index=False)
+    print(f"📁 Saved all {len(trades_df)} historical trades: {trades_csv_path}")
 
 if __name__ == '__main__':
     main()

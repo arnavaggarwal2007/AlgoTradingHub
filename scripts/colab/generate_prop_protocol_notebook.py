@@ -892,7 +892,7 @@ def generate_notebook():
         "source": [line + "\n" for line in CELL_15_CODE.splitlines()]
     })
 
-    out_path = 'scripts/Colab_backtest/Rajat_Alpha_Institutional_Prop_Protocol.ipynb'
+    out_path = 'scripts/colab/Rajat_Alpha_Institutional_Prop_Protocol.ipynb'
     with open(out_path, 'w', encoding='utf-8') as f:
         json.dump(nb, f, indent=2)
     print(f'Successfully generated: {out_path}')

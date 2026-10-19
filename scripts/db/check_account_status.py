@@ -8,8 +8,12 @@ import sys
 import os
 from datetime import datetime
 
-# Add parent directory to path
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+PROJECT_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
+if PROJECT_ROOT not in sys.path:
+    sys.path.insert(0, PROJECT_ROOT)
+
+if hasattr(sys.stdout, 'reconfigure'):
+    sys.stdout.reconfigure(encoding='utf-8')
 
 from rajat_alpha_v67_single import ConfigManager
 from alpaca.trading.client import TradingClient
@@ -154,9 +158,10 @@ def check_account_status():
             print()
         
         # Check 4: Daytrade count
-        if account.daytrade_count >= 3 and not account.pattern_day_trader:
-            warnings_found.append(f"⚠️  High daytrade count: {account.daytrade_count}/3")
-            print(f"⚠️  Warning: Close to PDT limit ({account.daytrade_count}/3 day trades)")
+        dt_cnt = account.daytrade_count if account.daytrade_count is not None else 0
+        if dt_cnt >= 3 and not account.pattern_day_trader:
+            warnings_found.append(f"⚠️  High daytrade count: {dt_cnt}/3")
+            print(f"⚠️  Warning: Close to PDT limit ({dt_cnt}/3 day trades)")
             print("   One more day trade in 5 days will trigger PDT restrictions")
             print()
         

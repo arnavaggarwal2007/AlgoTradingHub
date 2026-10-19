@@ -61,15 +61,17 @@ STALLING_RANGE_PCT          = 0.05
 
 # ─── Risk Management (mirror config.json → risk_management) ───────────────────
 STOP_LOSS_PCT   = 0.17    # Initial stop 17% below entry
-TARGET_1_PCT    = 0.10    # First profit target (+10%)  — 1/3 position exit
-TARGET_2_PCT    = 0.15    # Second profit target (+15%) — 1/3 position exit
-TARGET_3_PCT    = 0.20    # Final target (+20%)         — remaining 1/3 exit
+TARGET_1_PCT    = 0.05    # First profit target (+5%)   — 1/3 position exit
+TARGET_2_PCT    = 0.10    # Second profit target (+10%) — 1/3 position exit
+TARGET_3_PCT    = 0.15    # Final target (+15%)         — remaining 1/3 exit
 
 # Dynamic trailing-stop tiers (mirror config.json → risk_management)
-TIER1_PROFIT_PCT  = 0.05  # At +5% profit  → tighten SL to 9% below entry
-TIER1_SL_PCT      = 0.09  # SL = entry × (1 − 0.09)
-TIER2_PROFIT_PCT  = 0.10  # At +10% profit → tighten SL to 1% below entry
-TIER2_SL_PCT      = 0.01  # SL = entry × (1 − 0.01)  ← near break-even
+TIER1_PROFIT_PCT  = 0.05  # At +5% profit  → tighten SL to 4% below entry (-4%)
+TIER1_SL_PCT      = 0.04  # SL = entry × (1 − 0.04)
+TIER2_PROFIT_PCT  = 0.10  # At +10% profit → tighten SL to break-even (0%)
+TIER2_SL_PCT      = 0.00  # SL = entry × (1 − 0.00)  ← break-even
+TIER3_PROFIT_PCT  = 0.15  # At +15% profit → lock in +3% profit
+TIER3_SL_PCT      = -0.03 # SL = entry × (1 + 0.03)  ← lock in +3%
 
 INITIAL_CAPITAL = 10_000  # Default backtest starting capital ($)
 

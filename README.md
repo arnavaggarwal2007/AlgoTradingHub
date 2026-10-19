@@ -16,6 +16,7 @@
 6. [Smart Order Execution Engine (SOEE)](#-smart-order-execution-engine-soee)
 7. [Backtesting Pipeline (Google Colab & Local)](#-backtesting-pipeline-google-colab--local)
 8. [Production Deployment & Operational Runbook](#-production-deployment--operational-runbook)
+9. [Repository Architecture & Directory Guide](#-repository-architecture--directory-guide)
 
 ---
 
@@ -270,8 +271,8 @@ SOEE eliminates this leakage via an automated 3-stage limit order ladder:
 
 ### Institutional Prop & Portfolio Simulator Notebook:
 For capacity-constrained portfolio simulations, Monte Carlo pass rates, and multi-configuration comparisons, use:
-[`scripts/Colab_backtest/Rajat_Alpha_Institutional_Prop_Protocol.ipynb`](file:///C:/Alpaca_Algo2.0/Single_Buy2.0/scripts/Colab_backtest/Rajat_Alpha_Institutional_Prop_Protocol.ipynb)
-- **Cell 14**: 4-Configuration Portfolio Comparator (Standard, Conservative, Aggressive, Prop Spec). Generates the Master 6-Tab Excel Workbook (`rajat_alpha_4_configurations_simulation.xlsx`) with all 21 strategy attributes, plus Tab 6 containing the entire raw scanned universe (`rajat_alpha_scanned_trade_log.csv`). Features an interactive HTML Download Center with one-click direct download buttons for all trade logs.
+[`scripts/colab/Rajat_Alpha_Institutional_Prop_Protocol.ipynb`](file:///C:/Alpaca_Algo2.0/Single_Buy2.0/scripts/colab/Rajat_Alpha_Institutional_Prop_Protocol.ipynb)
+- **Cell 14**: 4-Configuration Portfolio Comparator (Standard, Conservative, Aggressive, Prop Spec). Generates the Master 5-Tab Excel Workbook (`rajat_alpha_4_configurations_simulation.xlsx`) with all 21 strategy attributes. Features an interactive HTML Download Center with one-click direct download buttons for all trade logs.
 - **Cell 15**: One-Click Batch Downloader & Master ZIP Archive (`rajat_alpha_all_simulation_reports.zip`).
 
 ### Empirical Backtest Performance Comparison (50 Stocks, 2023–2026):
@@ -315,6 +316,89 @@ Logs are structured as JSON compliance records in `logs/rajat_alpha_v67.log`:
 Get-Content logs/rajat_alpha_v67.log -Tail 30 -Wait
 ```
 Audit warnings and stop loss events are isolated in `logs/audit.log`.
+
+---
+
+## 📁 Repository Architecture & Directory Guide
+
+The codebase is organized strictly following SOLID design principles and separation of concerns:
+
+```text
+C:\Alpaca_Algo2.0\Single_Buy2.0\
+├── rajat_alpha_v67_single.py          # Core Strategy Engine & Execution Bot (at root)
+├── README.md                          # Master System Documentation
+├── requirements.txt                   # Production Python Dependencies
+├── .gitignore                         # Git exclusion rules
+│
+├── config/                            # All configuration files & symbol watchlists
+│   ├── README.md                      # Configuration manual & parameter dictionary
+│   ├── config.json                    # Central parameters (gating, risk, stops, targets)
+│   ├── watchlist.txt                  # Active 94-stock swing trading watchlist
+│   ├── weekly_high_conviction_watchlist.txt # Tier 1 Beast scanner output
+│   ├── exclusionlist.txt              # Blacklisted symbols
+│   └── selllist.txt                   # Immediate force-sell queue
+│
+├── db/                                # Active SQLite production database
+│   ├── README.md                      # Database documentation & table schema
+│   └── positions.db                   # Active production database ledger
+│
+├── backup/                            # Cold historical backups (isolated from active state)
+│   ├── README.md                      # Backup recovery procedures
+│   ├── db/                            # Historical database snapshots
+│   └── logs/                          # Rotated historical logs
+│
+├── logs/                              # Active runtime & audit logs
+│   ├── README.md                      # Logging policies & CLI tools
+│   ├── rajat_alpha_v67.log            # Main operational log
+│   └── audit.log                      # Immutable compliance audit trail
+│
+├── scripts/                           # Specialized automation & backtesting scripts
+│   ├── README.md                      # Master scripts directory guide
+│   ├── colab/                         # Colab notebooks, generators & simulators
+│   │   ├── README.md                  # Institutional Prop Protocol Colab Guide
+│   │   ├── Rajat_Alpha_Institutional_Prop_Protocol.ipynb # Master 15-cell Colab
+│   │   ├── generate_prop_protocol_notebook.py           # Programmatic notebook builder
+│   │   └── compare_4_configs_simulation.py              # 4-Configuration simulation engine
+│   ├── db/                            # Database management & broker reconciliation
+│   │   ├── README.md                  # DB CLI tools & reconciliation guides
+│   │   ├── check_positions.py         # Alpaca vs DB position reconciliation
+│   │   ├── check_account_status.py    # Account buying power & PDT health check
+│   │   ├── db_manager.py              # Database query & inspection tool
+│   │   └── cleanup_db.py              # Database VACUUM & integrity check
+│   ├── scanner/                       # Stock screening & live terminal monitoring
+│   │   ├── README.md                  # Scanner ranking & dashboard guide
+│   │   ├── rank_weekly_scan_symbols.py # Weekly Tier 1 Beast ranker
+│   │   └── signal_dashboard.py        # Terminal live signal dashboard
+│   └── reporting/                     # Executive PDF reporting
+│       ├── README.md                  # Executive reporting documentation
+│       └── generate_executive_pdf.py  # 2-Page publication-grade PDF generator
+│
+├── docs/                              # Research reports, PDFs, guides & datasets
+│   ├── README.md                      # Complete documents index
+│   ├── GOOGLE_COLAB_BACKTEST_GUIDE.md # 4-Step framework & Colab operation manual
+│   ├── CONFIGURATION_REFERENCE_GUIDE.md # Exhaustive config.json parameter guide
+│   ├── Rajat_Alpha_v67_Executive_Summary.pdf # Publication-grade 2-page PDF
+│   └── rajat_alpha_4_configurations_simulation.xlsx # Master 5-tab Excel workbook
+│
+├── tools/                             # Diagnostic & interactive UI tools
+│   ├── README.md                      # Tools directory catalog & run guide
+│   ├── stock_analyzer.py              # Position & trading limits auditor
+│   ├── benchmark_analyzer.py          # Alpaca data feed & benchmark validator
+│   ├── watchlist_analyzer.py          # Watchlist technical analyzer
+│   ├── log_analyzer.py                # CLI log analyzer & error auditor
+│   ├── log_dashboard.py               # Flask web log dashboard (port 5001)
+│   └── preSwingTradeAnalysis/         # Interactive Dash web application (port 8050)
+│
+├── enterprise_features/               # Institutional enterprise extensions
+│   ├── README.md                      # Enterprise features guide
+│   ├── risk_management/              # Value at Risk (VaR) calculator engine
+│   └── ui_dashboard/                 # Enterprise Flask UI dashboard
+│
+└── tests/                             # Automated test suites (31 unit tests)
+    ├── README.md                      # Test suite documentation & run commands
+    ├── test_v32_upgrades.py           # v3.2 institutional logic & risk tests
+    ├── test_bot.py                    # Main bot engine & database tests
+    └── test_comprehensive.py          # End-to-end integration test suite
 
 ---
 *Maintained by Institutional Quantitative Engineering Team. Licensed for Private Client Swing Trading.*

@@ -1,186 +1,63 @@
-# Analysis Tools Directory
+# Analysis & Diagnostic Tools Directory (`tools/`)
 
-This directory contains tools for analyzing stocks, watchlists, and data quality.
+This directory provides interactive dashboards, diagnostic analyzers, and market scanning tools for **Rajat Alpha v67 (Version 3.2)**.
 
-## Available Tools
+---
 
-### 1. `watchlist_analyzer.py`
+## Tool Catalog
 
-**Purpose**: Comprehensive analysis of all stocks in the watchlist.
+| Tool | Type | Purpose | Description |
+| :--- | :--- | :--- | :--- |
+| `stock_analyzer.py` | CLI | **Live Position & Signal Inspection** | Dumps current open positions from SQLite, checks last 24h signals, today's trade count, and validates trading rules from `config/config.json`. |
+| `benchmark_analyzer.py` | CLI | **Market Data & API Connectivity Check** | Connects to Alpaca API, fetches daily bars for SPY and QQQ, validates column structure, and tests calculation latency. |
+| `watchlist_analyzer.py` | CLI | **Batch Watchlist Scanner** | Scans every symbol in `config/watchlist.txt` against the v3.2 entry filters and prints passing vs failing symbols. |
+| `log_analyzer.py` | CLI | **Log Diagnostics & Error Auditor** | Parses `logs/rajat_alpha_v67.log`, summarizes error/warning counts, trades executed, and signal patterns over configurable date ranges. |
+| `log_dashboard.py` | Web UI | **Interactive Log Dashboard** | Flask web interface running at `http://localhost:5001` with interactive date range pickers, visual error summaries, and CSV exports. |
+| `preSwingTradeAnalysis/` | Web App | **Pre-Swing Trade Analysis Dash App** | Comprehensive interactive Dash web application with multi-timeframe charts, backtest simulation, news sentiment, and signal scoring. |
 
-**Original Name**: `comprehensive_watchlist_analysis.py`
+---
 
-**Usage**:
+## Tool Execution Guide
+
+### 1. Inspect Current Open Positions & Limits
+```bash
+python tools/stock_analyzer.py
+```
+*Outputs current open positions, entry prices, quantities, signal scores, and active risk limits.*
+
+### 2. Verify Alpaca Data Feed Connectivity (SPY / QQQ)
+```bash
+python tools/benchmark_analyzer.py
+```
+*Verifies market data connection, date ranges, and latest bar prices.*
+
+### 3. Analyze Entire Watchlist for Buy Signals
 ```bash
 python tools/watchlist_analyzer.py
 ```
 
-**Features**:
-- Analyzes all stocks in `config/watchlist.txt`
-- Checks market structure (SMA/EMA alignments)
-- Evaluates multi-timeframe confirmations
-- Identifies potential entry signals
-- Generates summary statistics
-
-**Output**:
-- List of stocks meeting entry criteria
-- Signal scores for each symbol
-- Pattern detections
-- Recommendations for trades
-
----
-
-### 2. `benchmark_analyzer.py`
-
-**Purpose**: Validate data quality and benchmark performance.
-
-**Original Name**: `test_benchmark_data.py`
-
-**Usage**:
+### 4. Audit Recent Bot Runtime Logs
 ```bash
-python tools/benchmark_analyzer.py
+# Analyze last 7 days of logs
+python tools/log_analyzer.py --days 7
+
+# Export log errors to CSV
+python tools/log_analyzer.py --days 14 --csv docs/log_errors.csv
 ```
 
-**Features**:
-- Tests market data retrieval
-- Validates technical indicator calculations
-- Checks for data quality issues
-- Benchmarks analysis speed
-- Verifies API connectivity
-
-**Output**:
-- Data quality report
-- Performance benchmarks
-- Error detection
-- Recommendations
-
----
-
-### 3. `stock_analyzer.py`
-
-**Purpose**: Detailed analysis of individual stocks.
-
-**Original Name**: `stock_analysis_report.py`
-
-**Usage**:
+### 5. Launch the Web Log Dashboard
 ```bash
-python tools/stock_analyzer.py
+python tools/log_dashboard.py
+# Open your browser at http://localhost:5001
 ```
 
-**Features**:
-- Deep dive into single stock technicals
-- Complete indicator breakdown
-- Chart pattern analysis
-- Entry/exit point identification
-- Risk assessment
-
-**Output**:
-- Comprehensive stock report
-- Technical indicator values
-- Buy/sell signals
-- Risk metrics
-
----
-
-## When to Use Each Tool
-
-### Watchlist Analyzer
-**Use when**:
-- You want to scan all watchlist stocks at once
-- Looking for the best opportunities across your universe
-- Need to prioritize which stocks to focus on
-- Want a complete portfolio view
-
-**Best for**: Daily/weekly portfolio scans
-
----
-
-### Benchmark Analyzer
-**Use when**:
-- Testing new API keys or configurations
-- Verifying data quality
-- Troubleshooting issues
-- Measuring system performance
-- After major updates
-
-**Best for**: System validation and troubleshooting
-
----
-
-### Stock Analyzer
-**Use when**:
-- Researching a specific stock in detail
-- Need complete technical picture
-- Preparing trade analysis
-- Investigating why stock was/wasn't signaled
-
-**Best for**: Individual stock research
-
----
-
-## Common Workflows
-
-### Pre-Market Analysis
+### 6. Launch the Pre-Swing Trade Analysis Dashboard
 ```bash
-# 1. Check data quality
-python tools/benchmark_analyzer.py
-
-# 2. Scan watchlist for opportunities
-python tools/watchlist_analyzer.py
-
-# 3. Deep dive on top picks
-python tools/stock_analyzer.py
+python tools/preSwingTradeAnalysis/app.py
+# Open your browser at http://localhost:8050
 ```
 
-### Troubleshooting
-
+To run unit tests for the Pre-Swing Trade Analysis suite:
 ```bash
-# If signals seem off
-1. Run benchmark_analyzer.py to verify data
-2. Run watchlist_analyzer.py to check calculations
-3. Run stock_analyzer.py on specific symbol
+python -m pytest tools/preSwingTradeAnalysis/tests/test_backtest_service.py
 ```
-
-### Weekly Research
-```bash
-# Sunday evening routine
-1. python tools/watchlist_analyzer.py > weekly_scan.txt
-2. Review top scores
-3. python tools/stock_analyzer.py for detailed research
-```
-
-## Configuration
-
-All tools use the main configuration:
-- **Watchlist**: `config/watchlist.txt`
-- **Exclusions**: `config/exclusionlist.txt`
-- **Parameters**: `config/config.json`
-
-No separate configuration needed.
-
-## Requirements
-
-- Python 3.8+
-- All main bot dependencies (pandas, pandas-ta, alpaca-py)
-- Valid Alpaca API credentials
-- Watchlist file
-
-## Tips
-
-1. **Run during market hours** for most accurate data
-
-2. **Use output redirection** to save reports:
-   ```bash
-   python tools/watchlist_analyzer.py > reports/daily_scan.txt
-   ```
-
-3. **Combine with scripts**:
-   ```bash
-   # Scan watchlist then check database
-   python tools/watchlist_analyzer.py
-   python scripts/db_manager.py --signals-today
-   ```
-
-4. **Benchmark before and after changes** to measure impact
-
-5. **Keep historical scans** to track how opportunities evolve

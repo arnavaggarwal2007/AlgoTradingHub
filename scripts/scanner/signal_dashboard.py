@@ -13,11 +13,16 @@ Usage:
 import sqlite3
 import argparse
 import os
+import sys
 import time
 from datetime import datetime
 from typing import List, Tuple
 
-DB_PATH = 'db/positions.db'
+if hasattr(sys.stdout, 'reconfigure'):
+    sys.stdout.reconfigure(encoding='utf-8')
+
+PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+DB_PATH = os.path.join(PROJECT_ROOT, 'db', 'positions.db')
 
 
 def clear_screen():

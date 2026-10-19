@@ -4,15 +4,19 @@ Comprehensive analysis of all stocks in watchlist.txt
 """
 import sys
 import os
-# Add parent directory to path to import the bot module
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+if hasattr(sys.stdout, 'reconfigure'):
+    sys.stdout.reconfigure(encoding='utf-8')
+
+PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+sys.path.insert(0, PROJECT_ROOT)
 
 from rajat_alpha_v67_single import RajatAlphaTradingBot
 import json
 
 def load_watchlist():
     """Load watchlist from file"""
-    watchlist_file = 'config/watchlist.txt'
+    watchlist_file = os.path.join(PROJECT_ROOT, 'config', 'watchlist.txt')
     try:
         with open(watchlist_file, 'r') as f:
             symbols = [line.strip().upper() for line in f if line.strip()]
@@ -56,7 +60,8 @@ def main():
 
     # Initialize bot
     try:
-        bot = RajatAlphaTradingBot(config_path='config/config.json')
+        config_path = os.path.join(PROJECT_ROOT, 'config', 'config.json')
+        bot = RajatAlphaTradingBot(config_path=config_path)
     except Exception as e:
         print(f"Failed to initialize bot: {e}")
         return

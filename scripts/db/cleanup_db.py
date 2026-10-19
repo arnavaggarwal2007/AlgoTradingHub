@@ -17,9 +17,14 @@ Usage:
 import sqlite3
 import argparse
 import os
+import sys
 from datetime import datetime, timedelta
 
-DB_PATH = 'db/positions.db'
+if hasattr(sys.stdout, 'reconfigure'):
+    sys.stdout.reconfigure(encoding='utf-8')
+
+PROJECT_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
+DB_PATH = os.path.join(PROJECT_ROOT, 'db', 'positions.db')
 
 
 def check_database_exists() -> bool:

@@ -1,181 +1,51 @@
-# Utility Scripts Directory
+# Scripts Directory (`scripts/`)
 
-This directory contains consolidated utility scripts that replace the numerous scattered check/query files.
+This directory organizes all utility, backtesting, database maintenance, screening, and reporting scripts for **Rajat Alpha v67**.
 
-## Available Scripts
-
-### 1. `db_manager.py` - Database Query & Management Tool
-
-**Purpose**: Unified interface for all database queries and inspection.
-
-**Replaces**: 
-- `check_db.py`
-- `query_db.py`
-- `check_signals.py`
-- `check_trades.py`
-- `check_recent_signals.py`
-- `check_valid_signals.py`
-
-**Usage Examples**:
-```bash
-# Show all tables and their schemas
-python scripts/db_manager.py --tables
-
-# View positions
-python scripts/db_manager.py --positions              # All positions
-python scripts/db_manager.py --positions-open         # Open only
-python scripts/db_manager.py --positions-closed       # Closed only
-
-# View signals
-python scripts/db_manager.py --signals                # Recent signals (last 20)
-python scripts/db_manager.py --signals-valid          # Valid signals only (score >= 2)
-python scripts/db_manager.py --signals-today          # Today's signals
-python scripts/db_manager.py --signals --limit 50     # Change limit
-
-# View statistics
-python scripts/db_manager.py --stats                  # Performance statistics
-
-# Complete dashboard
-python scripts/db_manager.py --all                    # Everything
-```
-
-**Features**:
-- Tabular display with emojis for visual clarity
-- Performance statistics by score and pattern
-- Win rate and P/L analysis
-- Flexible filtering and limits
+Following SOLID principles and clean separation of concerns, all scripts are divided into specialized subdirectories:
 
 ---
 
-### 2. `cleanup_db.py` - Database Maintenance Tool
+## Subdirectory Structure
 
-**Purpose**: Database cleanup and maintenance operations.
-
-**Replaces**:
-- `cleanup_signals.py`
-
-**Usage Examples**:
-```bash
-# Remove invalid signals (score <= 0)
-python scripts/cleanup_db.py --remove-invalid
-
-# Archive old closed positions
-python scripts/cleanup_db.py --archive 90            # Archive positions older than 90 days
-
-# Vacuum database to reclaim space
-python scripts/cleanup_db.py --vacuum
-
-# Verify database integrity
-python scripts/cleanup_db.py --verify
-
-# Run all cleanup operations
-python scripts/cleanup_db.py --all
+```text
+scripts/
+├── colab/          # Google Colab notebooks, generators, and institutional Monte Carlo simulators
+├── db/             # Database queries, reconciliations, account audits, and maintenance tools
+├── scanner/        # Weekly stock screening, technical ranking, and live signal monitoring
+└── reporting/      # Executive PDF reporting and publication-grade exports
 ```
-
-**Features**:
-- Safe removal of invalid data
-- Database optimization (VACUUM)
-- Integrity checks
-- Orphaned record detection
-- Statistics reporting
 
 ---
 
-### 3. `signal_dashboard.py` - Signal Monitoring Dashboard
+## Subdirectory Overview & Quick Reference
 
-**Purpose**: Interactive dashboard for monitoring trading signals.
+### 1. `scripts/colab/` — Institutional Backtesting & Monte Carlo Prop Simulator
+Houses all Google Colab `.ipynb` notebooks and local backtest engines.
+- `Rajat_Alpha_Institutional_Prop_Protocol.ipynb`: Master 15-cell Google Colab notebook implementing the 4-step framework (Map, Measure, Simulate, Operate), 10,000-run Monte Carlo simulations, capacity-constrained portfolio simulations, and 5-tab downloadable Excel workbook.
+- `generate_prop_protocol_notebook.py`: Automated generator that synchronizes the latest v3.2 bot rules into the Colab notebook.
+- `compare_4_configs_simulation.py`: Simulates 4 risk profiles ($10k capital, 15 max slots, score gating) and builds the multi-tab comparative spreadsheet.
 
-**Replaces**:
-- `signals_dashboard.py` (root directory)
+### 2. `scripts/db/` — Database Operations & Broker Reconciliation
+Handles the SQLite database lifecycle and reconciles open positions with Alpaca.
+- `check_positions.py`: Verifies all open positions between SQLite and Alpaca API.
+- `check_account_status.py`: Health check of Alpaca buying power, equity, and day trade limits.
+- `db_manager.py`: Command-line interface to inspect tables, open/closed positions, and signals.
+- `cleanup_db.py`: Database integrity verifier and VACUUM optimizer.
+- `upgrade_db.py`: Migration utility for database schema updates.
 
-**Usage Examples**:
-```bash
-# Show today's signals
-python scripts/signal_dashboard.py
+### 3. `scripts/scanner/` — Weekly Screening & Signals
+Screens candidate stocks and monitors real-time market signals.
+- `rank_weekly_scan_symbols.py`: Evaluates scanned symbols against v3.2 swing criteria and outputs Tier 1 "Beast" stocks for the weekly watchlist.
+- `signal_dashboard.py`: Interactive terminal dashboard for monitoring real-time signals.
 
-# Show signals for specific date
-python scripts/signal_dashboard.py --date 2026-02-15
-
-# Watch mode (auto-refresh every 60 seconds)
-python scripts/signal_dashboard.py --watch
-```
-
-**Features**:
-- Real-time signal monitoring
-- Execution status tracking
-- Signal type breakdown
-- Top pending signals highlight
-- Watch mode for continuous monitoring
+### 4. `scripts/reporting/` — Executive Summary Reports
+- `generate_executive_pdf.py`: Compiles the 2-page publication-grade PDF executive summary (`docs/Rajat_Alpha_v67_Executive_Summary.pdf`).
 
 ---
 
-## Why These Scripts?
-
-### Before Reorganization
-- 7+ scattered check/query scripts with overlapping functionality
-- Inconsistent output formats
-- Difficult to remember which script does what
-- Hard to maintain and update
-
-### After Reorganization
-- 3 focused, well-documented scripts
-- Consistent output formatting with visual indicators
-- Clear separation of concerns:
-  - **Query** (db_manager.py)
-  - **Maintain** (cleanup_db.py)
-  - **Monitor** (signal_dashboard.py)
-- Easy to extend and maintain
-
-## Common Workflows
-
-### Daily Monitoring
-```bash
-# Check today's signals and current positions
-python scripts/signal_dashboard.py
-
-# View open positions
-python scripts/db_manager.py --positions-open
-
-# Check performance stats
-python scripts/db_manager.py --stats
-```
-
-### Weekly Maintenance
-```bash
-# Clean up invalid signals
-python scripts/cleanup_db.py --remove-invalid
-
-# Vacuum database
-python scripts/cleanup_db.py --vacuum
-
-# Verify integrity
-python scripts/cleanup_db.py --verify
-```
-
-### Performance Analysis
-```bash
-# Complete dashboard with all metrics
-python scripts/db_manager.py --all
-
-# Analyze specific patterns
-python scripts/db_manager.py --stats
-```
-
-## Tips
-
-1. **Use --all for complete view**: `python scripts/db_manager.py --all` gives you everything at once
-
-2. **Watch mode for active trading**: `python scripts/signal_dashboard.py --watch` during trading hours
-
-3. **Regular cleanup**: Run `python scripts/cleanup_db.py --all` weekly to maintain database health
-
-4. **Check specific dates**: All scripts support date filtering for historical analysis
-
-## Requirements
-
-All scripts require:
-- Python 3.8+
-- SQLite3 (built-in with Python)
-- Database file at `db/positions.db`
-
-No additional dependencies beyond the main bot requirements.
+For detailed documentation, commands, and options for each subsystem, please refer to the README inside each respective folder:
+- [scripts/colab/README.md](file:///C:/Alpaca_Algo2.0/Single_Buy2.0/scripts/colab/README.md)
+- [scripts/db/README.md](file:///C:/Alpaca_Algo2.0/Single_Buy2.0/scripts/db/README.md)
+- [scripts/scanner/README.md](file:///C:/Alpaca_Algo2.0/Single_Buy2.0/scripts/scanner/README.md)
+- [scripts/reporting/README.md](file:///C:/Alpaca_Algo2.0/Single_Buy2.0/scripts/reporting/README.md)

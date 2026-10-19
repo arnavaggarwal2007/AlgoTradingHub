@@ -503,8 +503,8 @@ def create_notebook():
         ]
     })
 
-    os.makedirs('scripts', exist_ok=True)
-    out_file = 'scripts/Rajat_Alpha_v67_Scanned_Watchlist_Backtest.ipynb'
+    os.makedirs('scripts/colab', exist_ok=True)
+    out_file = 'scripts/colab/Rajat_Alpha_v67_Scanned_Watchlist_Backtest.ipynb'
     with open(out_file, 'w', encoding='utf-8') as f:
         json.dump(nb, f, indent=2)
     print(f'Successfully created Colab notebook: {out_file}')

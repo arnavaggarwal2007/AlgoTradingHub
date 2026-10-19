@@ -5,6 +5,12 @@ Produces a high-impact, 2-page publication-grade PDF for Fund Managers & Technic
 
 import os
 import sys
+
+if hasattr(sys.stdout, 'reconfigure'):
+    sys.stdout.reconfigure(encoding='utf-8')
+
+PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
 from reportlab.lib.pagesizes import letter
 from reportlab.lib import colors
 from reportlab.lib.units import inch
@@ -561,5 +567,6 @@ def build_pdf(filename="docs/Rajat_Alpha_v67_Executive_Summary.pdf"):
     print(f"Successfully generated 2-page executive proposal PDF: {filename}")
 
 if __name__ == "__main__":
-    build_pdf("docs/Rajat_Alpha_v67_Executive_Summary.pdf")
+    pdf_path = os.path.join(PROJECT_ROOT, "docs", "Rajat_Alpha_v67_Executive_Summary.pdf")
+    build_pdf(pdf_path)
 

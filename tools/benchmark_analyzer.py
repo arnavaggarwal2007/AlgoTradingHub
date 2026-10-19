@@ -4,8 +4,12 @@ Test script to check SPY and QQQ data fetching
 """
 import sys
 import os
-# Add parent directory to path to import the bot module
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+if hasattr(sys.stdout, 'reconfigure'):
+    sys.stdout.reconfigure(encoding='utf-8')
+
+PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+sys.path.insert(0, PROJECT_ROOT)
 
 from rajat_alpha_v67_single import RajatAlphaTradingBot
 import pandas as pd
@@ -17,7 +21,8 @@ def test_benchmark_data():
 
     try:
         # Initialize bot
-        bot = RajatAlphaTradingBot(config_path='config/config.json')
+        config_path = os.path.join(PROJECT_ROOT, 'config', 'config.json')
+        bot = RajatAlphaTradingBot(config_path=config_path)
 
         # Test symbols
         symbols = ['SPY', 'QQQ']

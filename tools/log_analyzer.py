@@ -14,14 +14,22 @@ from typing import Dict, List, Tuple, Optional
 import argparse
 from pathlib import Path
 
-# Add parent directory to path for imports
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+if hasattr(sys.stdout, 'reconfigure'):
+    sys.stdout.reconfigure(encoding='utf-8')
+
+PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+sys.path.insert(0, PROJECT_ROOT)
 
 
 class LogAnalyzer:
     """Analyzes trading bot logs and generates comprehensive reports"""
     
     def __init__(self, log_file: str = "logs/rajat_alpha_v67.log"):
+        # Resolve path relative to PROJECT_ROOT if not absolute and doesn't exist locally
+        if not os.path.isabs(log_file) and not os.path.exists(log_file):
+            alt_path = os.path.join(PROJECT_ROOT, log_file)
+            if os.path.exists(alt_path):
+                log_file = alt_path
         self.log_file = log_file
         self.entries = []
         self.errors = []

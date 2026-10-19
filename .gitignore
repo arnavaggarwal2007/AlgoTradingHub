@@ -5,11 +5,15 @@ __pycache__/
 
 # Logs and DB files
 *.log
-logs/
-Logs-Db-backup/
+!logs/.gitkeep
+logs/*.log
 *.db
 db/*.db
 !db/.gitkeep
+backup/db/*.db
+backup/logs/*.log
+!backup/db/.gitkeep
+!backup/logs/.gitkeep
 
 # Environment and sensitive API configs
 .env

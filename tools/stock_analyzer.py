@@ -2,13 +2,21 @@
 """
 Stock Analysis Report - Available for Trade Based on Ratings
 """
+import sys
+import os
 import sqlite3
 import pandas as pd
 from datetime import datetime, timedelta
 
+if hasattr(sys.stdout, 'reconfigure'):
+    sys.stdout.reconfigure(encoding='utf-8')
+
+PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+
 def main():
     # Connect to database
-    conn = sqlite3.connect('db/positions.db')
+    db_path = os.path.join(PROJECT_ROOT, 'db', 'positions.db')
+    conn = sqlite3.connect(db_path)
     cursor = conn.cursor()
 
     # Get today's signals (last 24 hours)
@@ -85,7 +93,8 @@ def main():
     print('=== TRADING LIMITS & CONSTRAINTS ===')
     try:
         import json
-        with open('config/config.json', 'r') as f:
+        config_path = os.path.join(PROJECT_ROOT, 'config', 'config.json')
+        with open(config_path, 'r') as f:
             config = json.load(f)
 
         trading_rules = config.get('trading_rules', {})

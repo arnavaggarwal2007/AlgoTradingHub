@@ -23,11 +23,13 @@ def upgrade_database(db_path: str) -> bool:
     # -------------------------------------------------------------
     # STEP 1: CREATE AUTOMATIC TIMESTAMPED BACKUP
     # -------------------------------------------------------------
-    db_dir = os.path.dirname(os.path.abspath(db_path))
+    # Store automatic backups cleanly in backup/db directory
+    backup_dir = os.path.join("backup", "db")
+    os.makedirs(backup_dir, exist_ok=True)
     db_name = os.path.basename(db_path)
     base_name, ext = os.path.splitext(db_name)
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    backup_path = os.path.join(db_dir, f"{base_name}_backup_{timestamp}{ext}")
+    backup_path = os.path.join(backup_dir, f"{base_name}_backup_{timestamp}{ext}")
 
     try:
         shutil.copy2(db_path, backup_path)

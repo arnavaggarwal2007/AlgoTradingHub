@@ -302,19 +302,19 @@ if touch_ema21_bar and barstate.isconfirmed
     bars_since_touch_21 := 0
     touch_ema21_cnt += 1
     if enable_touch_boxes and touch_ema21_cnt <= max_touch_boxes
-        box.new(left=bar_index - 1, top=math.min(high, ema21 * 1.008), right=bar_index, bottom=math.max(low, ema21 * 0.992), bgcolor=color.new(#00e5ff, 75), border_color=#00e5ff, text="TCH", tooltip="EMA 21 Touch #" + str.tostring(touch_ema21_cnt) + " of " + str.tostring(max_touch_boxes), text_size=size.tiny, text_color=color.black)
+        box.new(left=bar_index - 1, top=math.min(high, ema21 * 1.008), right=bar_index, bottom=math.max(low, ema21 * 0.992), bgcolor=color.new(#00e5ff, 75), border_color=#00e5ff, text="TCH", text_size=size.tiny, text_color=color.black)
 
 if touch_sma50_bar and barstate.isconfirmed
     bars_since_touch_50 := 0
     touch_sma50_cnt += 1
     if enable_touch_boxes and touch_sma50_cnt <= max_touch_boxes
-        box.new(left=bar_index - 1, top=math.min(high, sma50 * 1.008), right=bar_index, bottom=math.max(low, sma50 * 0.992), bgcolor=color.new(#ffd700, 75), border_color=#ffd700, text="TCH", tooltip="SMA 50 Touch #" + str.tostring(touch_sma50_cnt) + " of " + str.tostring(max_touch_boxes), text_size=size.tiny, text_color=color.black)
+        box.new(left=bar_index - 1, top=math.min(high, sma50 * 1.008), right=bar_index, bottom=math.max(low, sma50 * 0.992), bgcolor=color.new(#ffd700, 75), border_color=#ffd700, text="TCH", text_size=size.tiny, text_color=color.black)
 
 if touch_sma200_bar and barstate.isconfirmed
     bars_since_touch_200 := 0
     touch_sma200_cnt += 1
     if enable_touch_boxes and touch_sma200_cnt <= max_touch_boxes
-        box.new(left=bar_index - 1, top=math.min(high, sma200 * 1.008), right=bar_index, bottom=math.max(low, sma200 * 0.992), bgcolor=color.new(#e040fb, 75), border_color=#e040fb, text="TCH", tooltip="SMA 200 Touch #" + str.tostring(touch_sma200_cnt) + " of " + str.tostring(max_touch_boxes), text_size=size.tiny, text_color=color.black)
+        box.new(left=bar_index - 1, top=math.min(high, sma200 * 1.008), right=bar_index, bottom=math.max(low, sma200 * 0.992), bgcolor=color.new(#e040fb, 75), border_color=#e040fb, text="TCH", text_size=size.tiny, text_color=color.black)
 
 is_touch = (touch_ema21_bar or touch_sma50_bar) and near_ma
 

@@ -43,3 +43,4 @@ When you have additional Pine Script versions to preserve:
 1. **Indicator versions**: Save them into `TradingView/Indicator/` with a descriptive version tag (e.g. `Rajat Alpha v65.pine`, `Rajat Alpha v66.pine`).
 2. **Strategy versions**: Save them into `TradingView/Strategy/` with the `stgy` suffix.
 3. Simply share the Pine code in chat or paste it into this folder, and Antigravity will automatically index, validate, and synchronize them with GitHub `AlgoTradingHub`.
+

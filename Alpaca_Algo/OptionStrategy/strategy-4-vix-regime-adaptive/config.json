@@ -1,0 +1,109 @@
+{
+    "strategy": "vix_regime_adaptive",
+    "version": "1.0",
+
+    "watchlist": ["SPY", "QQQ", "IWM"],
+
+    "regime_rules": {
+        "low_vol": {
+            "vix_min": 0,
+            "vix_max": 15,
+            "delta": 0.08,
+            "spread_width": 3,
+            "dte_min": 25,
+            "dte_max": 35,
+            "size_multiplier": 0.25,
+            "profit_target_pct": 0.40,
+            "stop_loss_multiplier": 2.0,
+            "enabled": false
+        },
+        "normal": {
+            "vix_min": 15,
+            "vix_max": 22,
+            "delta": 0.12,
+            "spread_width": 5,
+            "dte_min": 30,
+            "dte_max": 45,
+            "size_multiplier": 1.0,
+            "profit_target_pct": 0.50,
+            "stop_loss_multiplier": 2.0,
+            "enabled": true
+        },
+        "high_vol": {
+            "vix_min": 22,
+            "vix_max": 35,
+            "delta": 0.15,
+            "spread_width": 10,
+            "dte_min": 45,
+            "dte_max": 60,
+            "size_multiplier": 1.5,
+            "profit_target_pct": 0.60,
+            "stop_loss_multiplier": 2.0,
+            "enabled": true
+        },
+        "crash": {
+            "vix_min": 35,
+            "vix_max": 999,
+            "delta": 0,
+            "spread_width": 0,
+            "dte_min": 0,
+            "dte_max": 0,
+            "size_multiplier": 0,
+            "profit_target_pct": 0,
+            "stop_loss_multiplier": 0,
+            "enabled": false
+        }
+    },
+
+    "mean_reversion": {
+        "require_declining_vix": true,
+        "vix_decline_pct": 0.10,
+        "lookback_days": 5,
+        "ma_period": 20,
+        "require_above_ma": true
+    },
+
+    "model": {
+        "algorithm": "random_forest",
+        "n_estimators": 100,
+        "max_depth": 8,
+        "retrain_interval_days": 30,
+        "training_years": 5,
+        "model_path": "models/regime_model.pkl",
+        "min_accuracy": 0.80,
+        "min_confidence": 0.60,
+        "use_ml_model": true
+    },
+
+    "fallback_thresholds": {
+        "low_vol": 15,
+        "normal": 22,
+        "high_vol": 35
+    },
+
+    "hard_limits": {
+        "emergency_vix_stop": 45,
+        "max_daily_loss_pct": 0.10,
+        "max_model_age_days": 60
+    },
+
+    "risk": {
+        "max_concurrent_spreads": 8,
+        "max_risk_per_trade_pct": 0.05,
+        "max_portfolio_exposure_pct": 0.20,
+        "max_same_underlying": 3,
+        "earnings_buffer_days": 5
+    },
+
+    "execution": {
+        "use_mid_price": true,
+        "mid_price_increment": 0.01,
+        "mid_price_max_retries": 10,
+        "scan_interval_minutes": 10
+    },
+
+    "logging": {
+        "level": "INFO",
+        "log_dir": "logs"
+    }
+}

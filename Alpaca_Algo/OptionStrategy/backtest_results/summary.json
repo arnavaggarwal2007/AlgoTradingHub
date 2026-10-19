@@ -1,0 +1,292 @@
+[
+  {
+    "strategy": "Wheel (CSP)",
+    "total_trades": 1,
+    "total_pnl": -1724.95,
+    "win_rate": 0.0,
+    "avg_trade_pnl": -1724.95,
+    "avg_winner": 0,
+    "avg_loser": -1724.95,
+    "max_drawdown_pct": -3.45,
+    "sharpe_ratio": -0.998,
+    "annualized_return_pct": -3.42,
+    "final_equity": 48275.05,
+    "initial_capital": 50000,
+    "market_condition_pnl": {
+      "downtrend": {
+        "pnl": -1724.9500000000003,
+        "count": 1,
+        "wins": 0
+      }
+    },
+    "exit_reasons": {
+      "stop_loss": {
+        "count": 1,
+        "pnl": -1724.9500000000003
+      }
+    }
+  },
+  {
+    "strategy": "SPX Bull Put Spreads",
+    "total_trades": 0,
+    "total_pnl": 0,
+    "win_rate": 0,
+    "avg_trade_pnl": 0,
+    "max_drawdown_pct": 0,
+    "sharpe_ratio": 0,
+    "annualized_return_pct": 0,
+    "market_condition_pnl": {}
+  },
+  {
+    "strategy": "Iron Condors",
+    "total_trades": 3,
+    "total_pnl": -334.37,
+    "win_rate": 33.3,
+    "avg_trade_pnl": -111.46,
+    "avg_winner": 122.56,
+    "avg_loser": -228.46,
+    "max_drawdown_pct": -0.91,
+    "sharpe_ratio": -1.01,
+    "annualized_return_pct": -0.73,
+    "final_equity": 49665.63,
+    "initial_capital": 50000,
+    "market_condition_pnl": {
+      "unknown": {
+        "pnl": 122.55999999999996,
+        "count": 1,
+        "wins": 1
+      },
+      "choppy": {
+        "pnl": -247.44000000000003,
+        "count": 1,
+        "wins": 0
+      },
+      "uptrend": {
+        "pnl": -209.48999999999995,
+        "count": 1,
+        "wins": 0
+      }
+    },
+    "exit_reasons": {
+      "profit_target": {
+        "count": 1,
+        "pnl": 122.55999999999996
+      },
+      "stop_loss": {
+        "count": 2,
+        "pnl": -456.92999999999995
+      }
+    }
+  },
+  {
+    "strategy": "VIX-Regime Adaptive",
+    "total_trades": 25,
+    "total_pnl": 332.34,
+    "win_rate": 76.0,
+    "avg_trade_pnl": 13.29,
+    "avg_winner": 39.31,
+    "avg_loser": -69.1,
+    "max_drawdown_pct": -0.25,
+    "sharpe_ratio": 1.16,
+    "annualized_return_pct": 0.66,
+    "final_equity": 50332.34,
+    "initial_capital": 50000,
+    "market_condition_pnl": {
+      "sideways": {
+        "pnl": 3.385000000000012,
+        "count": 10,
+        "wins": 7
+      },
+      "downtrend": {
+        "pnl": 242.34000000000006,
+        "count": 2,
+        "wins": 2
+      },
+      "uptrend": {
+        "pnl": 50.399999999999935,
+        "count": 12,
+        "wins": 9
+      },
+      "choppy": {
+        "pnl": 36.21,
+        "count": 1,
+        "wins": 1
+      }
+    },
+    "exit_reasons": {
+      "stop_loss": {
+        "count": 6,
+        "pnl": -414.62
+      },
+      "profit_target": {
+        "count": 18,
+        "pnl": 719.7099999999999
+      },
+      "end_of_backtest": {
+        "count": 1,
+        "pnl": 27.244999999999997
+      }
+    }
+  },
+  {
+    "strategy": "Wheel + Ladder",
+    "total_trades": 1,
+    "total_pnl": -1724.95,
+    "win_rate": 0.0,
+    "avg_trade_pnl": -1724.95,
+    "avg_winner": 0,
+    "avg_loser": -1724.95,
+    "max_drawdown_pct": -3.45,
+    "sharpe_ratio": -0.998,
+    "annualized_return_pct": -3.42,
+    "final_equity": 48275.05,
+    "initial_capital": 50000,
+    "market_condition_pnl": {
+      "downtrend": {
+        "pnl": -1724.95,
+        "count": 1,
+        "wins": 0
+      }
+    },
+    "exit_reasons": {
+      "ladder_hard_stop": {
+        "count": 1,
+        "pnl": -1724.95
+      }
+    }
+  },
+  {
+    "strategy": "SPX Spreads + Ladder",
+    "total_trades": 0,
+    "total_pnl": 0,
+    "win_rate": 0,
+    "avg_trade_pnl": 0,
+    "max_drawdown_pct": 0,
+    "sharpe_ratio": 0,
+    "annualized_return_pct": 0,
+    "market_condition_pnl": {}
+  },
+  {
+    "strategy": "Iron Condors + Ladder",
+    "total_trades": 5,
+    "total_pnl": 387.89,
+    "win_rate": 80.0,
+    "avg_trade_pnl": 77.58,
+    "avg_winner": 131.68,
+    "avg_loser": -138.81,
+    "max_drawdown_pct": -0.27,
+    "sharpe_ratio": 0.812,
+    "annualized_return_pct": 0.77,
+    "final_equity": 50387.89,
+    "initial_capital": 50000,
+    "market_condition_pnl": {
+      "unknown": {
+        "pnl": 494.49,
+        "count": 2,
+        "wins": 2
+      },
+      "choppy": {
+        "pnl": -138.81000000000037,
+        "count": 1,
+        "wins": 0
+      },
+      "uptrend": {
+        "pnl": 32.21000000000009,
+        "count": 2,
+        "wins": 2
+      }
+    },
+    "exit_reasons": {
+      "ladder_tier_3": {
+        "count": 1,
+        "pnl": 39.130000000000024
+      },
+      "expiration": {
+        "count": 1,
+        "pnl": 455.35999999999996
+      },
+      "ladder_tier_1": {
+        "count": 1,
+        "pnl": -138.81000000000037
+      },
+      "ladder_tier_2": {
+        "count": 1,
+        "pnl": 23.990000000000066
+      },
+      "ladder_trailing": {
+        "count": 1,
+        "pnl": 8.220000000000027
+      }
+    }
+  },
+  {
+    "strategy": "VIX-Regime + Ladder",
+    "total_trades": 56,
+    "total_pnl": 928.78,
+    "win_rate": 80.4,
+    "avg_trade_pnl": 16.59,
+    "avg_winner": 49.55,
+    "avg_loser": -118.25,
+    "max_drawdown_pct": -0.88,
+    "sharpe_ratio": 1.244,
+    "annualized_return_pct": 1.76,
+    "final_equity": 50928.78,
+    "initial_capital": 50000,
+    "market_condition_pnl": {
+      "sideways": {
+        "pnl": -51.98000000000022,
+        "count": 21,
+        "wins": 15
+      },
+      "downtrend": {
+        "pnl": 191.45000000000016,
+        "count": 4,
+        "wins": 3
+      },
+      "uptrend": {
+        "pnl": 634.4599999999996,
+        "count": 28,
+        "wins": 24
+      },
+      "choppy": {
+        "pnl": 154.85000000000002,
+        "count": 3,
+        "wins": 3
+      }
+    },
+    "exit_reasons": {
+      "ladder_stop_hard_stop": {
+        "count": 9,
+        "pnl": -1198.3200000000002
+      },
+      "ladder_tier_3": {
+        "count": 15,
+        "pnl": 268.1499999999999
+      },
+      "ladder_trailing": {
+        "count": 9,
+        "pnl": 109.07999999999991
+      },
+      "expiration": {
+        "count": 13,
+        "pnl": 1456.64
+      },
+      "ladder_max_profit": {
+        "count": 3,
+        "pnl": 206.49
+      },
+      "ladder_tier_2": {
+        "count": 4,
+        "pnl": 27.329999999999973
+      },
+      "ladder_stop_tier_2": {
+        "count": 1,
+        "pnl": -52.420000000000044
+      },
+      "end_of_backtest": {
+        "count": 2,
+        "pnl": 111.83000000000001
+      }
+    }
+  }
+]

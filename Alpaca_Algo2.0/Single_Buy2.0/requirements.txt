@@ -1,0 +1,28 @@
+# Rajat Alpha v67 Trading Bot - Python Dependencies
+# Installation: pip install -r requirements.txt
+
+# Alpaca Trading & Data APIs
+alpaca-py>=0.28.0
+
+# Data Analysis & Technical Indicators
+pandas>=2.0.0
+pandas-ta>=0.3.14b0
+
+# Timezone Support
+pytz>=2023.3
+
+# Structured Logging for Compliance
+python-json-logger>=2.0.7
+
+# Web Dashboard
+Flask>=3.0.0
+
+# Risk Calculations (VaR)
+numpy>=1.24.0
+scipy>=1.11.0
+
+# Database (included in Python standard library)
+# sqlite3 - No installation needed
+
+# Logging (included in Python standard library)  
+# logging - No installation needed

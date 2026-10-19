@@ -1,0 +1,61 @@
+{
+    "strategy": "wheel_premium_engine",
+    "version": "1.0",
+    
+    "watchlist": [
+        "AAPL", "MSFT", "AMD", "NVDA", "GOOGL",
+        "JPM", "KO", "JNJ", "SPY", "QQQ"
+    ],
+    
+    "csp_rules": {
+        "target_delta": 0.15,
+        "delta_tolerance": 0.05,
+        "min_dte": 30,
+        "max_dte": 45,
+        "min_iv_rank": 30,
+        "min_annualized_return_pct": 15,
+        "profit_target_pct": 0.50,
+        "stop_loss_multiplier": 3.0,
+        "max_dte_to_hold": 21
+    },
+    
+    "cc_rules": {
+        "target_delta": 0.30,
+        "delta_tolerance": 0.05,
+        "min_dte": 30,
+        "max_dte": 45,
+        "sell_above_cost_basis": true,
+        "profit_target_pct": 0.50,
+        "max_dte_to_hold": 21
+    },
+    
+    "risk": {
+        "max_capital_per_position_pct": 0.20,
+        "max_total_positions": 5,
+        "max_risk_per_trade_pct": 0.05,
+        "max_same_sector": 2,
+        "earnings_buffer_days": 5
+    },
+
+    "earnings_dates_manual": {
+        "_comment": "Add known earnings dates here to prevent trading around them",
+        "AAPL": [],
+        "MSFT": [],
+        "NVDA": []
+    },
+    
+    "execution": {
+        "use_mid_price": true,
+        "mid_price_increment": 0.01,
+        "mid_price_max_retries": 10,
+        "mid_price_retry_seconds": 30,
+        "scan_interval_minutes": 5,
+        "market_open_delay_minutes": 30,
+        "market_close_buffer_minutes": 15
+    },
+
+    "logging": {
+        "level": "INFO",
+        "log_dir": "logs"
+    }
+}

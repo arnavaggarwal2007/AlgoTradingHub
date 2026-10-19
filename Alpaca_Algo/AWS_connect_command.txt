@@ -1,0 +1,99 @@
+source venv/bin/activate
+python rajat_alpha_v67_dual.py
+
+
+ip: 18.191.18.207
+
+go to the download folder
+ssh -i "aws-key.pem" ubuntu@18.191.18.207
+
+
+
+
+Windows Users (easiest way):
+Open PowerShell.
+
+Navigate to your Downloads folder: cd Downloads
+
+Run this command (replace 1.2.3.4 with your EC2 Public IPv4 address found in the AWS console):
+
+PowerShell
+
+ssh -i "aws-key.pem" ubuntu@1.2.3.4
+(Type yes if asked about fingerprints).
+
+Mac/Linux Users:
+Open Terminal.
+
+Run: chmod 400 ~/Downloads/aws-key.pem (Protects the key).
+
+Run: ssh -i ~/Downloads/aws-key.pem ubuntu@1.2.3.4
+
+4. Part C: The "Copy-Paste" Command List
+Once you see the ubuntu@ip-172-xx-xx-xx:~$ prompt, you are inside the AWS cloud computer. Run these blocks one by one.
+
+Step 1: Install Python and Tools
+Copy this entire block and paste it into the terminal (Right-click to paste in PowerShell/Terminal).
+
+Bash
+
+# 1. Update the server software
+sudo apt update && sudo apt upgrade -y
+
+# 2. Install Python pip (package manager)
+sudo apt install python3-pip python3-venv -y
+
+# 3. Create a clean folder for your bot
+mkdir trading_bot
+cd trading_bot
+
+# 4. Create a virtual environment (Good practice!)
+python3 -m venv venv
+source venv/bin/activate
+
+# 5. Install the trading libraries
+pip install alpaca-py pandas pandas_ta pytz schedule
+
+
+Step 2: Create Your Files (The "Nano" Method)
+Since setting up file transfer tools (SFTP) can be annoying, we will just create the files directly on the server.
+
+A. Create config.json
+
+Type: nano config.json
+
+Paste your Configuration JSON content (from your local computer).
+
+Save: Press Ctrl + O, then Enter.
+
+Exit: Press Ctrl + X.
+
+
+5. Part D: Run it Forever (The "Screen" Trick)
+If you just type python alpha_bot.py, the bot will die the moment you close PowerShell. We use a tool called screen to keep it running in the background.
+
+Start a new screen session:
+
+Bash
+
+screen -S my_bot
+(The screen will clear. You are now in a "virtual" terminal.)
+
+Activate your environment and run the bot:
+
+Detach (The Magic Move):
+
+Press Ctrl + A, let go, then press D.
+
+You will see [detached] and return to the main command line.
+
+Your bot is now running in the background! You can safely close PowerShell/Terminal.
+
+How to check on your bot later:
+Log back into AWS via SSH and type:
+
+Bash
+
+screen -r my_bot
+(This brings the bot back to your screen so you can see the logs or stop it).
+

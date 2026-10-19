@@ -1,0 +1,21 @@
+# Pre-Swing Trade Analysis Dashboard — Python Dependencies
+# Install: pip install -r requirements.txt
+
+# ── Dash Framework ─────────────────────────────────────────────────────────────
+dash>=2.17.0
+dash-bootstrap-components>=1.6.0
+dash-ag-grid>=31.0.0
+
+# ── Market Data ────────────────────────────────────────────────────────────────
+yfinance>=0.2.40
+
+# ── Data / Analytics ──────────────────────────────────────────────────────────
+pandas>=2.0.0
+numpy>=1.24.0
+pandas-ta>=0.3.14b0
+
+# ── Visualisation ─────────────────────────────────────────────────────────────
+plotly>=5.20.0
+
+# ── Utilities (already in Single_Buy requirements) ────────────────────────────
+pytz>=2023.3

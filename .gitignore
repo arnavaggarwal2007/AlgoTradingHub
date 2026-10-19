@@ -1,0 +1,29 @@
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+*$py.class
+.pytest_cache/
+
+# Virtual Environments
+.venv/
+venv/
+ENV/
+
+# Credentials, Secrets & Keys
+*.env
+oci-ssh-keys/
+*.pem
+*.key
+
+# Database and Log files
+*.db
+*.log
+!*/db/.gitkeep
+!*/logs/.gitkeep
+!*/backup/db/.gitkeep
+!*/backup/logs/.gitkeep
+
+# IDE and OS files
+.DS_Store
+Thumbs.db
+.idea/

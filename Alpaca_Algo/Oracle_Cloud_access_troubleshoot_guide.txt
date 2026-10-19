@@ -1,0 +1,102 @@
+Public IP Address: 129.146.6.254
+
+Username: ubuntu
+
+
+How to connect Cyberduck to your Oracle Server:
+
+Download and open Cyberduck.
+
+Click Open Connection at the top left.
+
+Select SFTP (SSH File Transfer Protocol) from the dropdown.
+
+Server: 129.146.6.254 (Your Oracle IP)
+
+Username: ubuntu
+
+SSH Private Key: Check this box, click "Choose...", and select your downloaded ssh-key.key file.
+
+Click Connect.
+
+
+------------------------Connect to Oracle cloud ------------------
+1.  ssh -i ""C:\Alpaca_Algo\oci-ssh-keys\ssh-key-TradingBot_VCN_Private.key"" ubuntu@129.146.6.254
+
+Step 3: Launch the Real Money Bot
+
+screen -S real_money
+
+
+python3 -m venv venv
+source venv/bin/activate
+
+pip install alpaca-py pandas pandas_ta pytz schedule requests
+
+pip install python-json-logger
+
+Activate the environment and start the bot:
+
+cd ~/Alpaca_Algo/Single_Buy_Real_Money
+source ~/Alpaca_Algo/venv/bin/activate
+python rajat_alpha_v67_single.py
+
+
+
+-------------------- Error in the supervisor ----------------
+Both issues are directly linked to two configuration conflicts:
+Why the Web UI hangs: The helper file (audit_logs.conf) running tail -f created an infinite open stream. 
+When Supervisor's web interface tries to load an unbuffered tail -f stream, it freezes.Why paper_trading_bot exits too quickly: 
+Setting Supervisor's stdout_logfile directly to rajat_alpha_v67.log created a file lock conflict. 
+Supervisor tried to write to rajat_alpha_v67.log while your Python script's logging.FileHandler('logs/rajat_alpha_v67.log') simultaneously tried to open it, causing a permission crash.
+
+Here is the step-by-step fix to restore both bots and unfreeze the Web UI.
+1.Remove the audit log helper file:Delete audit_logs.conf to stop the Web UI from hanging:
+sudo rm /etc/supervisor/conf.d/audit_logs.conf
+2.Update paper_trading.conf:Open the paper trading configuration file:
+sudo nano /etc/supervisor/conf.d/paper_trading.conf
+
+Ensure stdout_logfile points to its own Supervisor file (paper_bot_out.log), leaving rajat_alpha_v67.log strictly for Python's internal file logger:Ini,
+TOML[program:paper_trading_bot]
+directory=/home/ubuntu/Alpaca_Algo/Single_Buy
+command=/home/ubuntu/Alpaca_Algo/venv/bin/python rajat_alpha_v67_single.py
+autostart=true
+autorestart=true
+stderr_logfile=/home/ubuntu/Alpaca_Algo/Single_Buy/logs/paper_bot_error.log
+stdout_logfile=/home/ubuntu/Alpaca_Algo/Single_Buy/logs/paper_bot_out.log
+user=ubuntu
+environment=PYTHONUNBUFFERED="1"
+(Save and exit: Ctrl+O, Enter, Ctrl+X)
+
+3.Update real_money.conf:Open the real money configuration file:
+sudo nano /etc/supervisor/conf.d/real_money.conf
+
+Ensure stdout_logfile points to real_bot_out.log:Ini, 
+
+TOML[program:real_money_bot]
+directory=/home/ubuntu/Alpaca_Algo/Single_Buy_Real_Money
+command=/home/ubuntu/Alpaca_Algo/venv/bin/python rajat_alpha_v67_single.py
+autostart=true
+autorestart=true
+stderr_logfile=/home/ubuntu/Alpaca_Algo/Single_Buy_Real_Money/logs/real_bot_error.log
+stdout_logfile=/home/ubuntu/Alpaca_Algo/Single_Buy_Real_Money/logs/real_bot_out.log
+user=ubuntu
+environment=PYTHONUNBUFFERED="1"
+(Save and exit: Ctrl+O, Enter, Ctrl+X)4.Reset ownership & reload Supervisor:
+
+
+Reset full ownership to the ubuntu user and reload Supervisor's process list:
+sudo chown -R ubuntu:ubuntu /home/ubuntu/Alpaca_Algo
+sudo supervisorctl reread
+sudo supervisorctl update
+sudo supervisorctl restart all
+
+
+VerificationOpen your browser and navigate to [http://129.146.6.254:9080](http://129.146.6.254:9080).
+Both paper_trading_bot and real_money_bot will display a stable green RUNNING status.
+Click Tail -f Stdout next to either bot to view standard console prints instantly without the browser hanging.
+
+
+
+
+

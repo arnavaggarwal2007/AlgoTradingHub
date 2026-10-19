@@ -1,0 +1,83 @@
+{
+  "api": {
+    "consumer_key": "YOUR_ETRADE_CONSUMER_KEY",
+    "consumer_secret": "YOUR_ETRADE_CONSUMER_SECRET",
+    "access_token": "",
+    "access_secret": "",
+    "environment": "sandbox",
+    "account_id_key": ""
+  },
+  
+  "market_data": {
+    "alpaca_api_key": "YOUR_ALPACA_API_KEY",
+    "alpaca_secret_key": "YOUR_ALPACA_SECRET_KEY",
+    "comment": "Alpaca API is used for free market data since E*TRADE requires subscription"
+  },
+  
+  "trading_rules": {
+    "max_open_positions": 2,
+    "max_trades_per_stock": 2,
+    "watchlist_file": "watchlist.txt",
+    "exclusion_file": "exclusionlist.txt",
+    "log_excluded_symbols": true,
+    "portfolio_mode": "watchlist_only",
+    "account_type_filter": "CASH"
+  },
+  
+  "position_sizing": {
+    "mode": "percent_equity",
+    "percent_of_equity": 0.10,
+    "fixed_amount": 5000,
+    "base_amount": 50000,
+    "percent_of_amount": 0.03
+  },
+  
+  "strategy_params": {
+    "min_listing_days": 200,
+    "sma_fast": 50,
+    "sma_slow": 200,
+    "ema_trend": 21,
+    "pullback_days": 4,
+    "pullback_pct": 5.0,
+    "stalling_days_long": 8,
+    "stalling_days_short": 3,
+    "stalling_range_pct": 5.0
+  },
+  
+  "risk_management": {
+    "initial_stop_loss_pct": 0.17,
+    "tier_1_profit_pct": 0.05,
+    "tier_1_stop_loss_pct": 0.09,
+    "tier_2_profit_pct": 0.10,
+    "tier_2_stop_loss_pct": 0.01,
+    "max_hold_days": 21,
+    "stop_loss_mode": "closing_basis",
+    "max_loss_mode": "percent",
+    "max_loss_pct": 0.02,
+    "max_loss_dollars": 500
+  },
+  
+  "profit_taking": {
+    "enable_partial_exits": true,
+    "target_1_pct": 0.10,
+    "target_1_qty": 0.333,
+    "target_2_pct": 0.15,
+    "target_2_qty": 0.333,
+    "target_3_pct": 0.20,
+    "target_3_qty": 0.334
+  },
+  
+  "execution_schedule": {
+    "buy_window_start_time": "15:00",
+    "buy_window_end_time": "15:59",
+    "default_interval_seconds": 120,
+    "last_hour_interval_seconds": 60
+  },
+  
+  "etrade_specific": {
+    "order_preview_required": true,
+    "commission_per_trade": 0.00,
+    "use_market_orders": true,
+    "allow_margin_trading": false
+  }
+}

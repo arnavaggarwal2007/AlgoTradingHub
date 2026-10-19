@@ -1,0 +1,37 @@
+{
+    "api": {
+        "key_id": "YOUR_ALPACA_API_KEY",
+        "secret_key": "YOUR_ALPACA_SECRET_KEY",
+        "base_url": "https://paper-api.alpaca.markets",
+        "_comment": "Change base_url to https://api.alpaca.markets for LIVE trading"
+    },
+    "global_risk": {
+        "max_portfolio_risk_pct": 0.20,
+        "max_risk_per_trade_pct": 0.05,
+        "max_positions": 10,
+        "max_same_sector": 3,
+        "earnings_buffer_days": 5,
+        "stop_loss_multiplier": 3.0,
+        "profit_target_pct": 0.50,
+        "max_dte_to_hold": 21,
+        "min_iv_rank": 30,
+        "enable_correlation_check": true
+    },
+    "execution": {
+        "use_mid_price": true,
+        "mid_price_increment": 0.01,
+        "mid_price_retry_seconds": 30,
+        "mid_price_max_retries": 10,
+        "order_timeout_seconds": 300
+    },
+    "schedule": {
+        "scan_interval_minutes": 5,
+        "market_open_delay_minutes": 30,
+        "market_close_buffer_minutes": 15
+    },
+    "logging": {
+        "level": "INFO",
+        "log_dir": "logs",
+        "enable_audit_log": true
+    }
+}

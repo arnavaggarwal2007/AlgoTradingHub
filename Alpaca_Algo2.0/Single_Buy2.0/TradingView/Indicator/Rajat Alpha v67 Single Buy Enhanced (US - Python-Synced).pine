@@ -1,5 +1,5 @@
 //@version=6
-indicator("Rajat Alpha v67 Single Buy Enhanced (US - Python-Synced v3.2)", overlay=true, max_boxes_count=300, max_labels_count=500, max_lines_count=300)
+indicator("Rajat Alpha v67 Single Buy Enhanced (US - Python-Synced v3.2)", overlay=true, max_boxes_count=500, max_labels_count=500, max_lines_count=500)
 
 // ================================================================================================
 // RAJAT ALPHA V67 (VERSION 3.2) - INSTITUTIONAL TRADINGVIEW ENGINE
@@ -7,84 +7,148 @@ indicator("Rajat Alpha v67 Single Buy Enhanced (US - Python-Synced v3.2)", overl
 //
 // Senior Pine Script Quantitative Architecture — Fully Synchronized with rajat_alpha_v67_single.py (v3.2)
 //
-// INSTITUTIONAL 8-STAGE GATING ARCHITECTURE:
-// 1. [Gate 0] Market Regime Check (SPY & QQQ structural health)
-// 2. [Gate 1 & 1.5] Market Structure (50 SMA > 200 SMA, Close > 200 SMA, 21 EMA >= 50 SMA - 2.5%)
-// 3. [Gate 2] Minervini Stage-2 Impulse Wave (+5% peak above EMA21 in last 20 bars & orderly retracement)
-// 4. [Gate 3] Candlestick Reversal Pattern Recognition (Engulfing, Piercing, Hammer, Tweezer, Reversal)
-// 5. [Gate 4] Weekly MTF Trend Confirmation (Weekly Close > Weekly EMA21)
-// 6. [Gate 5] Institutional Demand Zone Proximity (Low <= 21-Day Low * 1.035)
-// 7. [Gate 6] Exhaustion & Rejection Filters (Shooting Star Upper Wick rejection, Stalling, Gap >4%)
-// 8. [Gate 7] Institutional Conviction Scoring (Mandatory Score >= 4.0 Threshold)
+// 1. INSTITUTIONAL 8-STAGE GATING ARCHITECTURE:
+//    - [Gate 0] Market Regime Filter: SPY & QQQ structural health (> 50 SMA)
+//    - [Gate 1 & 1.5] Market Structure: 50 SMA > 200 SMA, Close > 200 SMA, 21 EMA >= 50 SMA - 2.5% tolerance
+//    - [Gate 2] Minervini Stage-2 Impulse Wave: Peak >= EMA21 + 5% in last 20 bars & orderly pullback
+//    - [Gate 3] Candlestick Reversal Recognition: 5 Tiered Patterns (Engulfing, Piercing, Hammer, Tweezer, Reversal)
+//    - [Gate 4] Weekly MTF Trend: Weekly Close > Weekly EMA 21 (Zero-lookahead request.security)
+//    - [Gate 5] Institutional Demand Zone: Low <= 21-Day Lowest Low * 1.035 (within 3.5% of bottom)
+//    - [Gate 6] Exhaustion & Rejection Filters: Shooting Star Upper Wick, Stalling Range <= 5%, Gap > 4%
+//    - [Gate 7] Institutional Conviction Score: Configurable Weights & Mandatory Score >= 4.0 Threshold
 //
-// DYNAMIC RISK & EXIT MANAGEMENT SUITE (v3.2):
-// - Initial Stop Loss: Hybrid ATR-Adaptive (1.5x - 2.0x ATR, bounded between 5% and 17%)
-// - Multi-Stage Stop Stepper:
-//     * Stage 1: At +5% profit  -> Tighten SL to -4% below entry
-//     * Stage 2: At +8% profit  -> Tighten SL to Break-Even (0.0%)
-//     * Stage 3: At +10% profit -> Lock in +3% profit
-//     * Stage 4: At +15% profit -> Enter Runner Mode, Ratchet SL to +10%
-// - 4-Tier Profit Exits: T1 (+5%), T2 (+10%), T3 (+15%), Runner Mode (30% position)
-// - Dynamic Structural TES: 21-day base with +10-day extensions when holding above EMA21
-// - Catastrophic Breaker: Immediate exit if P/L <= -22%
-// - True Daily Close Evaluation: Stops evaluated on daily bar close to avoid intraday wick whipsaws
+// 2. DYNAMIC RISK & EXIT MANAGEMENT SUITE:
+//    - Initial Stop Loss: Hybrid ATR-Adaptive (1.5x - 2.5x ATR, bounded 5% to 17%) or Fixed %
+//    - 4-Stage Stop Stepper:
+//        * Stage 1: At +5% profit  -> Tighten SL to -4% from entry
+//        * Stage 2: At +8% profit  -> Tighten SL to Break-Even (0.0% to +1%)
+//        * Stage 3: At +10% profit -> Lock in +3% profit
+//        * Stage 4: At +15% profit -> Enter Runner Mode (30%), Ratchet SL to +10%
+//    - 4-Tier Profit Scaling: T1 (+5%), T2 (+10%), T3 (+15%), Runner Mode (+20%)
+//    - Dynamic Structural TES: 21-day base hold with +10-day extensions when price holds EMA21 (max 2 extensions)
+//    - Catastrophic Circuit Breaker: Immediate exit if price drops <= -22%
+//    - Bar-Close Execution: Stops and exits evaluated on confirmed daily closes to avoid intraday wick whipsaws
+//
+// 3. IBD RELATIVE STRENGTH (RS) COMPOSITE RATING (0-100):
+//    - Factor 1: 1-month alpha vs QQQ (25% weight)
+//    - Factor 2: 21-day Up/Down volume ratio (25% weight)
+//    - Factor 3: 21-day Green vs Red days ratio (20% weight)
+//    - Factor 4: 52-week High proximity (20% weight)
+//    - Displayed in HUD Table, Tooltips, and Optional Indicator Line
+//
+// 4. VISUAL TOUCH BOXES & MOVING AVERAGE INTERACTION:
+//    - Visual small touch boxes drawn at 21 EMA, 50 SMA, and 200 SMA touch bars
+//    - Maximum 4 touches displayed; stops drawing after 4 touches
+//    - Counters reset automatically upon moving average golden/death cross (50/200 SMA)
+//
+// 5. VISUAL HUD, MULTI-RIBBONS & SIGNALS:
+//    - Top-Right HUD Table: OP/UP vs Sector, SPY, QQQ; Score, IBD RS, Win Rate %, Position Telemetry
+//    - Bottom Ribbons: Weekly Trend (Triangle Up), Monthly Trend (Triangle Down), Volume Conviction (Diamond)
+//    - Signal Labels: Primary Buy (B1) with full breakdown tooltip, Manual Opportunity (OPP), Gate Rejections (REJ)
 // ================================================================================================
 
 // ------------------------------------------------------------------------------------------------
-// 1. INPUT PARAMETERS (Aligned with config.json v3.2)
+// 1. INPUT PARAMETERS (Full Institutional Configuration)
 // ------------------------------------------------------------------------------------------------
-grp_gen     = "General Configuration"
-sector_ticker    = input.symbol("BATS:XLK", "Sector Benchmark ETF", group=grp_gen)
-min_listing_days = input.int(200, "Minimum Listing Days (Maturity Filter)", minval=50, maxval=500, group=grp_gen)
-min_score_req    = input.float(4.0, "Minimum Signal Score Required", minval=1.0, maxval=6.0, step=0.5, group=grp_gen, tooltip="Mandatory threshold: signals below 4.0 are rejected")
 
-grp_gate    = "Institutional 8-Stage Gating Filters"
-enable_extended_filter = input.bool(true, "Gate 6: Extended Stock Filter (Gap > 4%)", group=grp_gate)
-max_gap_pct            = input.float(0.04, "Max Intraday Gap %", minval=0.01, maxval=0.10, step=0.01, group=grp_gate)
-enable_impulse_gate    = input.bool(true, "Gate 2: Minervini Impulse Wave (+5% over EMA21)", group=grp_gate)
-impulse_peak_pct       = input.float(0.05, "Impulse Peak % Above EMA21", minval=0.02, maxval=0.15, step=0.01, group=grp_gate)
-impulse_lookback       = input.int(20, "Impulse Wave Lookback Days", minval=10, maxval=40, group=grp_gate)
-enable_shooting_star   = input.bool(true, "Gate 6: Shooting Star Exhaustion Rejection", group=grp_gate)
-enable_stalling_gate   = input.bool(true, "Gate 6: Stalling Range Filter", group=grp_gate)
-stalling_days_long     = input.int(8, "Stalling Lookback Days", minval=5, maxval=15, group=grp_gate)
-stalling_range_pct     = input.float(0.05, "Stalling Max Range %", minval=0.02, maxval=0.10, step=0.01, group=grp_gate)
+// --- Group: General & Market Regime ---
+grp_gen = "1. General & Market Regime"
+sector_ticker           = input.symbol("BATS:XLK", "Sector Benchmark ETF", group=grp_gen)
+spy_ticker              = input.symbol("BATS:SPY", "SPY Benchmark ETF", group=grp_gen)
+qqq_ticker              = input.symbol("BATS:QQQ", "QQQ Benchmark ETF", group=grp_gen)
+min_listing_days        = input.int(200, "Minimum Listing Days (Maturity Filter)", minval=50, maxval=500, group=grp_gen)
+enable_market_regime    = input.bool(true, "Gate 0: Market Regime Filter (SPY & QQQ > 50 SMA)", group=grp_gen)
 
-grp_risk    = "Risk Management & Stop Stepper (v3.2)"
-use_atr_sl       = input.bool(true, "Use Hybrid ATR-Adaptive Initial Stop", group=grp_risk)
-atr_multiplier   = input.float(2.0, "ATR Stop Multiplier", minval=1.0, maxval=3.0, step=0.1, group=grp_risk)
-min_sl_pct       = input.float(0.05, "Min Initial Stop Loss %", minval=0.03, maxval=0.10, step=0.01, group=grp_risk)
-max_sl_pct       = input.float(0.17, "Max Initial Stop Loss %", minval=0.10, maxval=0.25, step=0.01, group=grp_risk)
-tier1_profit_pct = input.float(0.05, "Stage 1 Profit Trigger (+5%)", minval=0.02, maxval=0.10, step=0.01, group=grp_risk)
-tier1_sl_pct     = input.float(0.04, "Stage 1 Stop Loss (-4% from entry)", minval=0.01, maxval=0.10, step=0.01, group=grp_risk)
-tier2_profit_pct = input.float(0.08, "Stage 2 Profit Trigger (+8%)", minval=0.05, maxval=0.15, step=0.01, group=grp_risk)
-tier3_profit_pct = input.float(0.10, "Stage 3 Profit Trigger (+10%)", minval=0.08, maxval=0.20, step=0.01, group=grp_risk)
-tier3_sl_lock    = input.float(0.03, "Stage 3 Locked Profit (+3%)", minval=0.01, maxval=0.08, step=0.01, group=grp_risk)
-tier4_profit_pct = input.float(0.15, "Stage 4 Runner Trigger (+15%)", minval=0.12, maxval=0.25, step=0.01, group=grp_risk)
-tier4_sl_lock    = input.float(0.10, "Stage 4 Locked Profit (+10%)", minval=0.05, maxval=0.15, step=0.01, group=grp_risk)
-catastrophic_sl  = input.float(0.22, "Catastrophic Circuit Breaker %", minval=0.15, maxval=0.30, step=0.01, group=grp_risk)
+// --- Group: 8-Stage Gating Filters ---
+grp_gate = "2. Institutional 8-Stage Gating Filters"
+enable_extended_filter  = input.bool(true, "Gate 6: Extended Stock Filter (Gap > Max Gap %)", group=grp_gate)
+max_gap_pct             = input.float(0.04, "Max Intraday Gap % (Default: 4%)", minval=0.01, maxval=0.15, step=0.005, group=grp_gate)
+enable_impulse_gate     = input.bool(true, "Gate 2: Minervini Impulse Wave (+5% over EMA21)", group=grp_gate)
+impulse_peak_pct        = input.float(0.05, "Impulse Peak % Above EMA21", minval=0.02, maxval=0.15, step=0.01, group=grp_gate)
+impulse_lookback        = input.int(20, "Impulse Lookback Days", minval=10, maxval=40, group=grp_gate)
+min_pullback_pct        = input.float(0.03, "Min Pullback Decline % from Peak", minval=0.01, maxval=0.10, step=0.005, group=grp_gate)
+enable_shooting_star    = input.bool(true, "Gate 6: Shooting Star Upper Wick Rejection", group=grp_gate)
+max_upper_wick_ratio    = input.float(0.50, "Max Upper Wick to Range Ratio", minval=0.30, maxval=0.70, step=0.05, group=grp_gate)
+enable_stalling_gate    = input.bool(true, "Gate 6: Stalling Range Filter", group=grp_gate)
+stalling_days_long      = input.int(8, "Stalling Lookback Days", minval=5, maxval=15, group=grp_gate)
+stalling_range_pct      = input.float(0.05, "Stalling Max Range %", minval=0.02, maxval=0.10, step=0.01, group=grp_gate)
+dz_tolerance_pct        = input.float(0.035, "Demand Zone Proximity % (Default: 3.5%)", minval=0.01, maxval=0.08, step=0.005, group=grp_gate)
 
-grp_targets = "Profit Targets & Runner Scaling"
-target_1_pct = input.float(0.05, "Target 1 (+5%) [Scale 20%]", minval=0.03, maxval=0.10, step=0.01, group=grp_targets)
-target_2_pct = input.float(0.10, "Target 2 (+10%) [Scale 25%]", minval=0.08, maxval=0.15, step=0.01, group=grp_targets)
-target_3_pct = input.float(0.15, "Target 3 (+15%) [Scale 25%]", minval=0.12, maxval=0.25, step=0.01, group=grp_targets)
+// --- Group: Institutional Scoring Weights (Configurable 0.0 to 7.0+) ---
+grp_score = "3. Institutional Conviction Scoring Weights"
+min_score_req           = input.float(4.0, "Minimum Score Required for B1 / OPP", minval=1.0, maxval=7.0, step=0.5, group=grp_score)
+score_qqq_outperform_w  = input.float(1.0, "Weight: Outperforming QQQ (21d Alpha)", minval=0.0, maxval=2.0, step=0.1, group=grp_score)
+score_weekly_trend_w    = input.float(1.0, "Weight: Weekly Trend Bullish (Close > EMA21)", minval=0.0, maxval=2.0, step=0.1, group=grp_score)
+score_monthly_trend_w   = input.float(1.0, "Weight: Monthly Trend Bullish (Close > EMA10)", minval=0.0, maxval=2.0, step=0.1, group=grp_score)
+score_volume_high_w     = input.float(1.0, "Weight: Volume Expansion (> 21d Avg)", minval=0.0, maxval=2.0, step=0.1, group=grp_score)
+score_demand_zone_w     = input.float(1.0, "Weight: Institutional Demand Zone Proximity", minval=0.0, maxval=2.0, step=0.1, group=grp_score)
+score_rsi_momentum_w    = input.float(1.0, "Weight: RSI(14) Momentum > 50", minval=0.0, maxval=2.0, step=0.1, group=grp_score)
+score_pattern_tierA_w   = input.float(1.0, "Weight: Tier A Patterns (Engulfing / Piercing)", minval=0.0, maxval=2.0, step=0.1, group=grp_score)
+score_pattern_tierB_w   = input.float(0.8, "Weight: Tier B Patterns (Hammer / Tweezer)", minval=0.0, maxval=2.0, step=0.1, group=grp_score)
+score_pattern_tierC_w   = input.float(0.6, "Weight: Tier C Pattern (Upside Reversal)", minval=0.0, maxval=2.0, step=0.1, group=grp_score)
+score_touch_1st_bonus   = input.float(1.0, "Bonus: 1st MA Touch to Trend", minval=0.0, maxval=2.0, step=0.1, group=grp_score)
+score_touch_2nd_bonus   = input.float(0.5, "Bonus: 2nd MA Touch to Trend", minval=0.0, maxval=2.0, step=0.1, group=grp_score)
+use_ibd_score_bonus     = input.bool(false, "Include IBD RS Score Bonus in Total Score", group=grp_score)
+ibd_bonus_threshold     = input.float(70.0, "IBD RS Rating Threshold for Bonus", minval=50.0, maxval=90.0, step=5.0, group=grp_score)
+ibd_bonus_points        = input.float(0.5, "IBD RS Bonus Points Added", minval=0.1, maxval=1.5, step=0.1, group=grp_score)
 
-grp_tes     = "Dynamic Structural Time Exit Stop (TES)"
-tes_base_days    = input.int(21, "Base TES Hold Period (Days)", minval=10, maxval=35, group=grp_tes)
-tes_ext_days     = input.int(10, "Extension Days (When Above EMA21)", minval=5, maxval=15, group=grp_tes)
-tes_max_exts     = input.int(2, "Max Allowable Extensions", minval=0, maxval=3, group=grp_tes)
+// --- Group: Risk Management & Dynamic Stop Stepper ---
+grp_risk = "4. Risk Management & Dynamic Stop Stepper"
+use_atr_sl              = input.bool(true, "Use Hybrid ATR-Adaptive Initial Stop Loss", group=grp_risk)
+atr_period              = input.int(14, "ATR Lookback Period", minval=5, maxval=30, group=grp_risk)
+atr_multiplier          = input.float(2.0, "ATR Initial Stop Multiplier", minval=1.0, maxval=3.5, step=0.1, group=grp_risk)
+min_sl_pct              = input.float(0.05, "Min Initial Stop Loss % (Floor: 5%)", minval=0.02, maxval=0.10, step=0.01, group=grp_risk)
+max_sl_pct              = input.float(0.17, "Max Initial Stop Loss % (Cap: 17%)", minval=0.10, maxval=0.25, step=0.01, group=grp_risk)
+fixed_sl_fallback_pct   = input.float(0.08, "Fallback Fixed SL % (If ATR Disabled)", minval=0.03, maxval=0.15, step=0.01, group=grp_risk)
+tier1_profit_pct        = input.float(0.05, "Stage 1 Profit Trigger (+5%)", minval=0.02, maxval=0.10, step=0.01, group=grp_risk)
+tier1_sl_pct            = input.float(0.04, "Stage 1 SL Level (-4% from entry)", minval=0.01, maxval=0.08, step=0.01, group=grp_risk)
+tier2_profit_pct        = input.float(0.08, "Stage 2 Profit Trigger (+8%)", minval=0.05, maxval=0.12, step=0.01, group=grp_risk)
+tier2_sl_pct            = input.float(0.00, "Stage 2 SL Level (Break-Even 0.0%)", minval=-0.01, maxval=0.03, step=0.005, group=grp_risk)
+tier3_profit_pct        = input.float(0.10, "Stage 3 Profit Trigger (+10%)", minval=0.08, maxval=0.15, step=0.01, group=grp_risk)
+tier3_sl_lock           = input.float(0.03, "Stage 3 Locked Profit SL (+3%)", minval=0.01, maxval=0.06, step=0.005, group=grp_risk)
+tier4_profit_pct        = input.float(0.15, "Stage 4 Runner Trigger (+15%)", minval=0.12, maxval=0.25, step=0.01, group=grp_risk)
+tier4_sl_lock           = input.float(0.10, "Stage 4 Runner Locked SL (+10%)", minval=0.05, maxval=0.15, step=0.01, group=grp_risk)
+catastrophic_sl         = input.float(0.22, "Catastrophic Circuit Breaker % (-22%)", minval=0.15, maxval=0.30, step=0.01, group=grp_risk)
 
-grp_limits  = "Execution Cadence & Capacity"
-enable_max_trades  = input.bool(true, "Enable Daily Execution Limit", group=grp_limits)
-max_trades_per_day = input.int(3, "Max Daily Trades Allowed", minval=1, maxval=10, group=grp_limits)
+// --- Group: Profit Targets & Runner Scaling ---
+grp_targets = "5. Profit Targets & Partial Scaling"
+target_1_pct            = input.float(0.05, "Target 1 (+5%) [Scale 20%]", minval=0.03, maxval=0.10, step=0.01, group=grp_targets)
+target_2_pct            = input.float(0.10, "Target 2 (+10%) [Scale 25%]", minval=0.08, maxval=0.15, step=0.01, group=grp_targets)
+target_3_pct            = input.float(0.15, "Target 3 (+15%) [Scale 25%]", minval=0.12, maxval=0.20, step=0.01, group=grp_targets)
+target_4_pct            = input.float(0.20, "Target 4 (+20%) [Scale Runner]", minval=0.16, maxval=0.30, step=0.01, group=grp_targets)
 
-grp_vis     = "Visuals, Overlays & HUD"
-show_ma_lines       = input.bool(true, "Show Moving Average Lines (EMA21, SMA50, SMA200)", group=grp_vis)
-show_target_lines   = input.bool(true, "Show Projected Target Levels (+5%, +10%, +15%)", group=grp_vis)
-show_stepper_levels = input.bool(true, "Show Dynamic Trailing Stop Stepper Line", group=grp_vis)
-show_pattern_bars   = input.bool(true, "Highlight Setup Candles by Pattern", group=grp_vis)
-show_hud_dashboard  = input.bool(true, "Show Institutional Performance HUD Table", group=grp_vis)
-show_stats_table    = input.bool(true, "Show Rejection & Filter Statistics", group=grp_vis)
-show_legend_table   = input.bool(true, "Show Strategy Legend Table", group=grp_vis)
+// --- Group: Dynamic Structural TES ---
+grp_tes = "6. Dynamic Structural Time Exit Stop (TES)"
+tes_base_days           = input.int(21, "Base TES Hold Period (Trading Days)", minval=10, maxval=40, group=grp_tes)
+tes_ext_days            = input.int(10, "Extension Days (Holding Above EMA21)", minval=5, maxval=15, group=grp_tes)
+tes_max_exts            = input.int(2, "Max Allowable TES Extensions", minval=0, maxval=3, group=grp_tes)
+runner_exempt_tes       = input.bool(true, "Exempt Stage 4 Runners from TES Exits", group=grp_tes)
+
+// --- Group: Moving Average Touches & Visual Touch Boxes ---
+grp_touch = "7. Moving Average Touches & Visual Touch Boxes"
+enable_touch_boxes      = input.bool(true, "Show Visual Touch Boxes on MAs", group=grp_touch)
+max_touch_boxes         = input.int(4, "Max Touches to Display (Capped at 4)", minval=1, maxval=4, group=grp_touch, tooltip="Per specification: Boxes stop showing after 4 touches or until reset by 50/200 cross")
+touch_threshold_pct     = input.float(0.025, "Touch Proximity Range % (2.5%)", minval=0.005, maxval=0.05, step=0.005, group=grp_touch)
+
+// --- Group: Execution Cadence Limits ---
+grp_limits = "8. Execution Cadence & Capacity"
+enable_max_trades       = input.bool(true, "Enable Daily Trade Limit", group=grp_limits)
+max_trades_per_day      = input.int(3, "Max Daily Trades Allowed", minval=1, maxval=10, group=grp_limits)
+
+// --- Group: Visual Displays & HUD Dashboards ---
+grp_vis = "9. Visual Displays & HUD Dashboards"
+show_ma_lines           = input.bool(true, "Show Moving Average Lines (EMA21, SMA50, SMA200)", group=grp_vis)
+show_target_lines       = input.bool(true, "Show Profit Target Levels (+5%, +10%, +15%, +20%)", group=grp_vis)
+show_stepper_levels     = input.bool(true, "Show Dynamic Trailing Stop Stepper Line", group=grp_vis)
+show_pattern_bars       = input.bool(true, "Colorize Setup Candles by Pattern", group=grp_vis)
+show_demand_zone_boxes  = input.bool(true, "Show Institutional Demand Zone (3.5% DZ)", group=grp_vis)
+show_weekly_ribbon      = input.bool(true, "Show Bottom Ribbon: Weekly Trend (Triangle Up)", group=grp_vis)
+show_monthly_ribbon     = input.bool(true, "Show Bottom Ribbon: Monthly Trend (Triangle Down)", group=grp_vis)
+show_volume_ribbon      = input.bool(true, "Show Bottom Ribbon: Volume Conviction (Diamond)", group=grp_vis)
+show_hud_dashboard      = input.bool(true, "Show Top-Right Institutional HUD Dashboard Table", group=grp_vis)
+show_stats_table        = input.bool(true, "Show Top-Left Gate Rejection Statistics Table", group=grp_vis)
+show_legend_table       = input.bool(true, "Show Bottom-Right Strategy Legend Table", group=grp_vis)
+show_ibd_score_line     = input.bool(false, "Plot IBD RS Composite Rating Line", group=grp_vis)
 
 // ------------------------------------------------------------------------------------------------
 // 2. CORE TECHNICAL INDICATORS & MULTI-TIMEFRAME ENGINE
@@ -92,7 +156,8 @@ show_legend_table   = input.bool(true, "Show Strategy Legend Table", group=grp_v
 ema21  = ta.ema(close, 21)
 sma50  = ta.sma(close, 50)
 sma200 = ta.sma(close, 200)
-atr14  = ta.atr(14)
+atr14  = ta.atr(atr_period)
+rsi14  = ta.rsi(close, 14)
 
 vol_sma21 = ta.sma(volume, 21)
 vol_high  = volume > vol_sma21
@@ -109,19 +174,73 @@ monthly_close = request.security(syminfo.tickerid, "M", close[barstate.isrealtim
 monthly_ema10 = request.security(syminfo.tickerid, "M", ta.ema(close, 10)[barstate.isrealtime ? 1 : 0], gaps=barmerge.gaps_off, lookahead=barmerge.lookahead_off)
 monthly_ok    = not na(monthly_close) and not na(monthly_ema10) ? monthly_close > monthly_ema10 : true
 
-// Market Benchmarks (SPY & QQQ relative strength)
-s_perf = (close - close[math.min(21, bar_index)]) / close[math.min(21, bar_index)]
-q_p    = request.security("BATS:QQQ", "D", (close - close[math.min(21, bar_index)]) / close[math.min(21, bar_index)], lookahead=barmerge.lookahead_off)
-sp_p   = request.security("BATS:SPY", "D", (close - close[math.min(21, bar_index)]) / close[math.min(21, bar_index)], lookahead=barmerge.lookahead_off)
-sec_p  = request.security(sector_ticker, "D", (close - close[math.min(21, bar_index)]) / close[math.min(21, bar_index)], lookahead=barmerge.lookahead_off)
+// Market Benchmarks (21-Day Relative Performance)
+safe_lb = math.max(1, math.min(21, bar_index))
+s_perf  = (close - close[safe_lb]) / close[safe_lb]
+q_p     = request.security(qqq_ticker, "D", (close - close[safe_lb]) / close[safe_lb], lookahead=barmerge.lookahead_off)
+sp_p    = request.security(spy_ticker, "D", (close - close[safe_lb]) / close[safe_lb], lookahead=barmerge.lookahead_off)
+sec_p   = request.security(sector_ticker, "D", (close - close[safe_lb]) / close[safe_lb], lookahead=barmerge.lookahead_off)
+
+// Gate 0: Broad Market Regime Check (SPY & QQQ > 50 SMA)
+spy_close = request.security(spy_ticker, "D", close[barstate.isrealtime ? 1 : 0], lookahead=barmerge.lookahead_off)
+spy_sma50 = request.security(spy_ticker, "D", ta.sma(close, 50)[barstate.isrealtime ? 1 : 0], lookahead=barmerge.lookahead_off)
+qqq_close = request.security(qqq_ticker, "D", close[barstate.isrealtime ? 1 : 0], lookahead=barmerge.lookahead_off)
+qqq_sma50 = request.security(qqq_ticker, "D", ta.sma(close, 50)[barstate.isrealtime ? 1 : 0], lookahead=barmerge.lookahead_off)
+
+market_regime_ok = not enable_market_regime or ((not na(spy_close) and not na(spy_sma50) ? spy_close > spy_sma50 : true) and (not na(qqq_close) and not na(qqq_sma50) ? qqq_close > qqq_sma50 : true))
 
 // Institutional Demand Zone (within 3.5% of 21-day lowest low)
 low_21  = ta.lowest(low, 21)
 high_21 = ta.highest(high, 21)
-in_dz   = low <= (low_21 * 1.035)
+in_dz   = low <= (low_21 * (1.0 + dz_tolerance_pct))
 
 // ------------------------------------------------------------------------------------------------
-// 3. CANDLESTICK PATTERN RECOGNITION (All 5 v3.2 Reversal Types)
+// 3. IBD-STYLE RELATIVE STRENGTH COMPOSITE RATING (0-100)
+// Exact replication of Python calculate_rs_composite() (Lines 947-988 of rajat_alpha_v67_single.py)
+// ------------------------------------------------------------------------------------------------
+// Factor 1: 1-Month Return vs QQQ (Alpha)
+alpha_val = (1.0 + s_perf) / (1.0 + (not na(q_p) ? q_p : 0.0))
+ibd_factor1 = math.max(0.0, math.min(100.0, (alpha_val - 0.90) / 0.30 * 100.0))
+
+// Factor 2: 21-Day Up/Down Volume Ratio
+up_vol_sum = 0.0
+dn_vol_sum = 0.0
+for i = 0 to 20
+    if close[i] > open[i]
+        up_vol_sum += nz(volume[i])
+    else if close[i] < open[i]
+        dn_vol_sum += nz(volume[i])
+
+dn_vol_sum := math.max(1.0, dn_vol_sum)
+ud_ratio = up_vol_sum / dn_vol_sum
+ibd_factor2 = math.max(0.0, math.min(100.0, (ud_ratio - 0.70) / 1.0 * 100.0))
+
+// Factor 3: 21-Day Green vs Red Days Ratio
+green_days_cnt = 0
+red_days_cnt   = 0
+for i = 0 to 20
+    if close[i] > open[i]
+        green_days_cnt += 1
+    else if close[i] < open[i]
+        red_days_cnt += 1
+
+red_days_cnt := math.max(1, red_days_cnt)
+gr_ratio = float(green_days_cnt) / float(red_days_cnt)
+ibd_factor3 = math.max(0.0, math.min(100.0, (gr_ratio - 0.60) / 0.80 * 100.0))
+
+// Factor 4: 52-Week High Proximity (252 Trading Days)
+lb_52 = math.max(1, math.min(252, bar_index))
+high_52 = ta.highest(high, lb_52)
+dist_52 = high_52 > 0 ? (high_52 - close) / high_52 : 0.0
+ibd_factor4 = math.max(0.0, math.min(100.0, (1.0 - (dist_52 / 0.20)) * 100.0))
+
+// Composite IBD RS Rating (Weighted 35% Alpha, 25% U/D Vol, 20% Green/Red, 20% 52w High)
+ibd_rs_rating = (ibd_factor1 * 0.35) + (ibd_factor2 * 0.25) + (ibd_factor3 * 0.20) + (ibd_factor4 * 0.20)
+
+plot(show_ibd_score_line ? ibd_rs_rating : na, "IBD RS Rating Line", color=color.purple, linewidth=2)
+
+// ------------------------------------------------------------------------------------------------
+// 4. CANDLESTICK PATTERN RECOGNITION (All 5 Institutional Reversals)
 // ------------------------------------------------------------------------------------------------
 candle_range = high - low
 real_body    = math.abs(close - open)
@@ -140,37 +259,36 @@ is_tweezer = is_green and close[1] < open[1] and math.abs(low - low[1]) <= (low 
 // Pattern 4: Bullish Hammer (Tier B, +0.8 pt)
 lower_shadow = math.min(open, close) - low
 upper_shadow = high - math.max(open, close)
-is_hammer    = is_green and candle_range > 0 and lower_shadow >= 2.0 * real_body and upper_shadow <= 0.20 * candle_range
+is_hammer    = is_green and candle_range > 0 and lower_shadow >= (2.0 * real_body) and upper_shadow <= (0.20 * candle_range)
 
 // Pattern 5: Upside Reversal (Tier C, +0.6 pt)
 midpoint_bar = (high[1] + low[1]) / 2.0
 is_reversal  = is_green and open < close[1] and close > midpoint_bar and not (is_engulfing or is_piercing or is_hammer or is_tweezer)
 
-pattern_hit = is_engulfing or is_piercing or is_tweezer or is_hammer or is_reversal
-pattern_name = is_engulfing ? "Engulfing" : is_piercing ? "Piercing" : is_hammer ? "Hammer" : is_tweezer ? "Tweezer" : is_reversal ? "Reversal" : "Touch"
-pattern_weight = is_engulfing or is_piercing ? 1.0 : is_hammer or is_tweezer ? 0.8 : is_reversal ? 0.6 : 0.5
+pattern_hit    = is_engulfing or is_piercing or is_tweezer or is_hammer or is_reversal
+pattern_name   = is_engulfing ? "Engulfing" : is_piercing ? "Piercing" : is_hammer ? "Hammer" : is_tweezer ? "Tweezer" : is_reversal ? "Reversal" : "Touch"
+pattern_weight = is_engulfing or is_piercing ? score_pattern_tierA_w : is_hammer or is_tweezer ? score_pattern_tierB_w : is_reversal ? score_pattern_tierC_w : 0.5
 
 // ------------------------------------------------------------------------------------------------
-// 4. INSTITUTIONAL GATING SYSTEM (8 Sequential Gates)
+// 5. INSTITUTIONAL 8-STAGE GATING SYSTEM
 // ------------------------------------------------------------------------------------------------
 // Gate 1 & 1.5: Market Structure Alignment
-structure_ok = (sma50 > sma200) and (close > sma200) and (ema21 >= (sma50 * 0.975))
+structure_ok = not na(sma50) and not na(sma200) ? ((sma50 > sma200) and (close > sma200) and (ema21 >= (sma50 * 0.975))) : true
 
 // Gate 2: Minervini Stage-2 Impulse Wave & Orderly Retracement
-highest_high_20 = ta.highest(high, impulse_lookback)
-ema21_at_peak   = ta.ema(close, 21) // Proxy approximation
-impulse_passed  = not enable_impulse_gate or (highest_high_20 >= ema21 * (1.0 + impulse_peak_pct))
-retracement_ok  = not enable_impulse_gate or ((highest_high_20 - low) / highest_high_20 >= 0.03 or (close < close[1] and close[1] < close[2]))
-gate2_ok        = impulse_passed and retracement_ok
+highest_high_imp = ta.highest(high, impulse_lookback)
+impulse_passed   = not enable_impulse_gate or (highest_high_imp >= ema21 * (1.0 + impulse_peak_pct))
+retracement_ok   = not enable_impulse_gate or ((highest_high_imp - low) / highest_high_imp >= min_pullback_pct or (close < close[1] and close[1] < close[2]))
+gate2_ok         = impulse_passed and retracement_ok
 
 // Gate 3: Pullback & Touch Confirmation
-dist_ema21 = math.abs(close - ema21) / ema21
-dist_sma50 = math.abs(close - sma50) / sma50
-near_ma    = (dist_ema21 <= 0.025) or (dist_sma50 <= 0.025)
+dist_ema21  = math.abs(close - ema21) / ema21
+dist_sma50  = math.abs(close - sma50) / sma50
+near_ma     = (dist_ema21 <= touch_threshold_pct) or (dist_sma50 <= touch_threshold_pct)
 is_pullback = ta.highest(high, 4)[1] > high
 
 // Gate 6: Exhaustion Filters (Shooting Star, Extended Gap, Stalling)
-is_shooting_star = enable_shooting_star and candle_range > 0 and (upper_shadow / candle_range >= 0.50 or upper_shadow >= 2.0 * real_body)
+is_shooting_star = enable_shooting_star and candle_range > 0 and (upper_shadow / candle_range >= max_upper_wick_ratio or upper_shadow >= 2.0 * real_body)
 prev_close       = close[1]
 gap_pct          = prev_close > 0 ? (close - prev_close) / prev_close : 0.0
 is_extended      = enable_extended_filter and (gap_pct > max_gap_pct)
@@ -179,27 +297,73 @@ range_long       = ta.highest(high, stalling_days_long) - ta.lowest(low, stallin
 avg_price_long   = (ta.highest(high, stalling_days_long) + ta.lowest(low, stalling_days_long)) / 2.0
 is_stalling      = enable_stalling_gate and (avg_price_long > 0 ? (range_long / avg_price_long) <= stalling_range_pct : false)
 
-// Touch Signals
-x_ema21 = ta.crossunder(low, ema21)
-x_sma50 = ta.crossunder(low, sma50)
-is_touch = (x_ema21 or x_sma50) and near_ma
+// ------------------------------------------------------------------------------------------------
+// 6. MOVING AVERAGE TOUCH TRACKING & VISUAL TOUCH BOXES
+// Enforces max 4 touches, stops drawing after 4, and resets on 50/200 crossover
+// ------------------------------------------------------------------------------------------------
+var int touch_ema21_cnt  = 0
+var int touch_sma50_cnt  = 0
+var int touch_sma200_cnt = 0
+
+// Trend Reset: Golden Cross or Death Cross of 50 SMA / 200 SMA resets touch counters
+if ta.cross(sma50, sma200)
+    touch_ema21_cnt  := 0
+    touch_sma50_cnt  := 0
+    touch_sma200_cnt := 0
+
+// Touch Definitions (Price intersects MA band)
+touch_ema21_bar  = low <= ema21 and high >= (ema21 * 0.99)
+touch_sma50_bar  = low <= sma50 and high >= (sma50 * 0.99)
+touch_sma200_bar = low <= sma200 and high >= (sma200 * 0.99)
+
+// Touch Tracking & Visual Box Creation (Only first 4 touches get visual boxes)
+if touch_ema21_bar and barstate.isconfirmed
+    touch_ema21_cnt += 1
+    if enable_touch_boxes and touch_ema21_cnt <= max_touch_boxes
+        box.new(left=bar_index - 1, top=math.min(high, ema21 * 1.008), right=bar_index, bottom=math.max(low, ema21 * 0.992), bgcolor=color.new(#00e5ff, 75), border_color=#00e5ff, text="21 T" + str.tostring(touch_ema21_cnt), text_size=size.tiny, text_color=color.white)
+
+if touch_sma50_bar and barstate.isconfirmed
+    touch_sma50_cnt += 1
+    if enable_touch_boxes and touch_sma50_cnt <= max_touch_boxes
+        box.new(left=bar_index - 1, top=math.min(high, sma50 * 1.008), right=bar_index, bottom=math.max(low, sma50 * 0.992), bgcolor=color.new(#ffd700, 75), border_color=#ffd700, text="50 T" + str.tostring(touch_sma50_cnt), text_size=size.tiny, text_color=color.white)
+
+if touch_sma200_bar and barstate.isconfirmed
+    touch_sma200_cnt += 1
+    if enable_touch_boxes and touch_sma200_cnt <= max_touch_boxes
+        box.new(left=bar_index - 1, top=math.min(high, sma200 * 1.008), right=bar_index, bottom=math.max(low, sma200 * 0.992), bgcolor=color.new(#e040fb, 75), border_color=#e040fb, text="200 T" + str.tostring(touch_sma200_cnt), text_size=size.tiny, text_color=color.white)
+
+is_touch = (touch_ema21_bar or touch_sma50_bar) and near_ma
 
 // ------------------------------------------------------------------------------------------------
-// 5. INSTITUTIONAL CONVICTION SCORING ENGINE (0.0 to 5.0+)
+// 7. INSTITUTIONAL CONVICTION SCORING ENGINE (0.0 to 7.0+)
+// Fully Configurable Weights Matching Python calculate_score()
 // ------------------------------------------------------------------------------------------------
 float score = 0.0
-score += (s_perf > q_p ? 1.0 : 0.0)      // Outperforming QQQ
-score += (weekly_ok ? 1.0 : 0.0)         // Weekly Trend confirmed
-score += (monthly_ok ? 1.0 : 0.0)        // Monthly Trend confirmed
-score += (vol_high ? 1.0 : 0.0)          // Volume Contraction/Expansion
-score += (in_dz ? 1.0 : 0.0)             // In Institutional Demand Zone
+
+// Technical & Market Factors
+score += (s_perf > q_p ? score_qqq_outperform_w : 0.0)
+score += (weekly_ok ? score_weekly_trend_w : 0.0)
+score += (monthly_ok ? score_monthly_trend_w : 0.0)
+score += (vol_high ? score_volume_high_w : 0.0)
+score += (in_dz ? score_demand_zone_w : 0.0)
+score += (rsi14 > 50.0 ? score_rsi_momentum_w : 0.0)
+
+// Pattern Weight
 if pattern_hit
-    score += pattern_weight              // Reversal Pattern weight
-if is_touch
-    score += 0.5                         // Key MA Touch Bonus
+    score += pattern_weight
+
+// Moving Average Touch State Bonuses (1st touch gets 1.0, 2nd touch gets 0.5)
+if touch_ema21_bar
+    score += (touch_ema21_cnt <= 1 ? score_touch_1st_bonus : touch_ema21_cnt == 2 ? score_touch_2nd_bonus : 0.0)
+else if touch_sma50_bar
+    score += (touch_sma50_cnt <= 1 ? score_touch_1st_bonus : touch_sma50_cnt == 2 ? score_touch_2nd_bonus : 0.0)
+
+// Optional IBD RS Rating Bonus
+if use_ibd_score_bonus and ibd_rs_rating >= ibd_bonus_threshold
+    score += ibd_bonus_points
 
 // ------------------------------------------------------------------------------------------------
-// 6. DAILY EXECUTION CADENCE TRACKER
+// 8. DAILY EXECUTION CADENCE TRACKER & REJECTION AUDIT
 // ------------------------------------------------------------------------------------------------
 var int trades_executed_today = 0
 if ta.change(time("D")) != 0
@@ -208,6 +372,7 @@ if ta.change(time("D")) != 0
 max_trades_reached = enable_max_trades and (trades_executed_today >= max_trades_per_day)
 
 // Rejection Counters
+var int rej_cnt_regime   = 0
 var int rej_cnt_score    = 0
 var int rej_cnt_extended = 0
 var int rej_cnt_star     = 0
@@ -224,7 +389,10 @@ is_valid_signal := false
 rej_reason := ""
 
 if candidate_signal
-    if is_shooting_star
+    if not market_regime_ok
+        rej_reason := "REGIME (SPY/QQQ < 50)"
+        rej_cnt_regime += 1
+    else if is_shooting_star
         rej_reason := "SHOOTING_STAR"
         rej_cnt_star += 1
     else if is_extended
@@ -243,7 +411,7 @@ if candidate_signal
         is_valid_signal := true
 
 // ------------------------------------------------------------------------------------------------
-// 7. POSITION LIFECYCLE & DYNAMIC RISK ENGINE (v3.2 State Machine)
+// 9. POSITION LIFECYCLE & DYNAMIC RISK ENGINE (v3.2 State Machine)
 // ------------------------------------------------------------------------------------------------
 var bool  in_position    = false
 var float pos_entry      = na
@@ -254,15 +422,16 @@ var int   pos_ext_count  = 0
 var bool  pos_t1_hit     = false
 var bool  pos_t2_hit     = false
 var bool  pos_t3_hit     = false
+var bool  pos_t4_hit     = false
 var bool  pos_is_runner  = false
 
 var int   total_wins     = 0
 var int   total_losses   = 0
 
-// Execution Event
+// Execution Event: Automated B1 entry occurs only when no position is running
 buy_action = is_valid_signal and not in_position
 
-if buy_action
+if buy_action and barstate.isconfirmed
     in_position   := true
     pos_entry     := close
     pos_bar       := bar_index
@@ -271,24 +440,25 @@ if buy_action
     pos_t1_hit    := false
     pos_t2_hit    := false
     pos_t3_hit    := false
+    pos_t4_hit    := false
     pos_is_runner := false
     trades_executed_today += 1
     
-    // Hybrid ATR Initial Stop Loss
-    atr_stop_dist = use_atr_sl ? (atr_multiplier * atr14) : (pos_entry * max_sl_pct)
-    atr_stop_dist := math.max(pos_entry * min_sl_pct, math.min(pos_entry * max_sl_pct, atr_stop_dist))
-    pos_sl := pos_entry - atr_stop_dist
+    // Hybrid ATR Initial Stop Loss (Bounded min 5%, max 17%)
+    atr_dist = use_atr_sl ? (atr_multiplier * atr14) : (pos_entry * fixed_sl_fallback_pct)
+    atr_dist := math.max(pos_entry * min_sl_pct, math.min(pos_entry * max_sl_pct, atr_dist))
+    pos_sl   := pos_entry - atr_dist
 
-// Position Management & Stop Stepper
+// Active Position Management (Evaluated on confirmed daily bar closes)
 var string exit_reason = ""
 exit_occurred = false
 
-if in_position
-    held_days = bar_index - pos_bar
-    profit_pct = (high - pos_entry) / pos_entry
+if in_position and barstate.isconfirmed
+    held_days   = bar_index - pos_bar
+    profit_pct  = (high - pos_entry) / pos_entry
     current_pnl = (close - pos_entry) / pos_entry
     
-    // Profit Targets Scale-out Detection
+    // Profit Targets Detection
     if not pos_t1_hit and profit_pct >= target_1_pct
         pos_t1_hit := true
     if not pos_t2_hit and profit_pct >= target_2_pct
@@ -296,8 +466,10 @@ if in_position
     if not pos_t3_hit and profit_pct >= target_3_pct
         pos_t3_hit := true
         pos_is_runner := true
+    if not pos_t4_hit and profit_pct >= target_4_pct
+        pos_t4_hit := true
     
-    // Dynamic Trailing Stop Stepper (Evaluated on Daily Close / High)
+    // Dynamic Trailing Stop Stepper (Stage 1 -> Stage 2 -> Stage 3 -> Stage 4)
     if profit_pct >= tier4_profit_pct and pos_stage < 4
         pos_stage := 4
         pos_sl := math.max(pos_sl, pos_entry * (1.0 + tier4_sl_lock))
@@ -306,29 +478,28 @@ if in_position
         pos_sl := math.max(pos_sl, pos_entry * (1.0 + tier3_sl_lock))
     else if profit_pct >= tier2_profit_pct and pos_stage < 2
         pos_stage := 2
-        pos_sl := math.max(pos_sl, pos_entry) // Break-even
+        pos_sl := math.max(pos_sl, pos_entry * (1.0 + tier2_sl_pct)) // Break-even
     else if profit_pct >= tier1_profit_pct and pos_stage < 1
         pos_stage := 1
         pos_sl := math.max(pos_sl, pos_entry * (1.0 - tier1_sl_pct)) // -4%
         
-    // Dynamic Structural TES (Time Exit Stop with +10-day extensions)
+    // Dynamic Structural TES (21-day base + 10-day extensions when above EMA21)
     effective_tes_days = tes_base_days + (pos_ext_count * tes_ext_days)
     tes_triggered = held_days >= effective_tes_days
     
-    if tes_triggered and not pos_is_runner
-        // Check for extension if price is healthy and above EMA21
+    if tes_triggered and not (pos_is_runner and runner_exempt_tes)
         if close > ema21 and pos_ext_count < tes_max_exts
             pos_ext_count += 1
             tes_triggered := false
             label.new(bar_index, high, "TES +10d", color=color.new(color.blue, 30), textcolor=color.white, style=label.style_label_down, size=size.tiny)
 
-    // Stop Loss Check (Evaluated on Bar Close)
+    // Stop Loss Trigger (Evaluated on confirmed Daily Close to avoid wick whipsaws)
     sl_triggered = close <= pos_sl
     
-    // Catastrophic Circuit Breaker
+    // Catastrophic Circuit Breaker (-22% Intraday)
     circuit_breaker = low <= pos_entry * (1.0 - catastrophic_sl)
     
-    if sl_triggered or (tes_triggered and not pos_is_runner) or circuit_breaker
+    if sl_triggered or (tes_triggered and not (pos_is_runner and runner_exempt_tes)) or circuit_breaker
         exit_occurred := true
         exit_reason := circuit_breaker ? "BREAKER (-22%)" : sl_triggered ? (pos_stage > 0 ? "TRAIL SL" : "INIT SL") : "TES (" + str.tostring(held_days) + "d)"
         
@@ -342,7 +513,7 @@ if in_position
         in_position := false
 
 // ------------------------------------------------------------------------------------------------
-// 8. VISUAL OVERLAYS, PLOTS & LABELS
+// 10. VISUAL OVERLAYS, PLOTS & LABELS
 // ------------------------------------------------------------------------------------------------
 // Moving Average Lines
 plot(show_ma_lines ? ema21 : na, "EMA 21", color=color.new(#00e5ff, 0), linewidth=2)
@@ -357,104 +528,224 @@ plot(show_stepper_levels and in_position ? pos_sl : na, "Dynamic Stop Stepper", 
 p_t1 = in_position and show_target_lines ? pos_entry * (1.0 + target_1_pct) : na
 p_t2 = in_position and show_target_lines ? pos_entry * (1.0 + target_2_pct) : na
 p_t3 = in_position and show_target_lines ? pos_entry * (1.0 + target_3_pct) : na
+p_t4 = in_position and show_target_lines ? pos_entry * (1.0 + target_4_pct) : na
 
 plot(p_t1, "Target 1 (+5%)", color=color.new(#3b82f6, 40), style=plot.style_circles)
 plot(p_t2, "Target 2 (+10%)", color=color.new(#8b5cf6, 40), style=plot.style_circles)
 plot(p_t3, "Target 3 (+15%)", color=color.new(#10b981, 40), style=plot.style_circles)
+plot(p_t4, "Target 4 (+20%)", color=color.new(#059669, 40), style=plot.style_circles)
 
 // Candle Pattern Highlights
 barcolor(show_pattern_bars and is_engulfing ? color.new(#00e676, 30) : 
          show_pattern_bars and is_piercing ? color.new(#76ff03, 30) : 
          show_pattern_bars and is_hammer ? color.new(#00b0ff, 30) : 
-         show_pattern_bars and is_tweezer ? color.new(#e040fb, 30) : na)
+         show_pattern_bars and is_tweezer ? color.new(#e040fb, 30) : 
+         show_pattern_bars and is_reversal ? color.new(#ffea00, 30) : na)
 
-// Buy Signal Labels
+// Institutional Demand Zone Box (Current Bar Context)
+if show_demand_zone_boxes and barstate.islast
+    box.new(left=bar_index - 21, top=low_21 * (1.0 + dz_tolerance_pct), right=bar_index + 5, bottom=low_21, bgcolor=color.new(#c8e6c9, 50), border_color=color.green, text="Institutional DZ (3.5%)", text_halign=text.align_right, text_size=size.tiny)
+
+// Comprehensive Tooltip Builder Function for B1 and OPP Signals
+build_signal_tooltip(is_opp, p_score, p_ibd, p_name, p_entry, p_sl) =>
+    hdr = is_opp ? "⚡ DISCRETIONARY MANUAL OPPORTUNITY (OPP)\n" + "Automated Single-Buy position already running. Use for manual discretionary entry.\n" : "🎯 INSTITUTIONAL BUY SIGNAL (B1) - VERIFIED v3.2\n"
+    body = "========================================\n" +
+           "Total Score: " + str.tostring(p_score, "#.#") + " / 7.0 (Min Req: " + str.tostring(min_score_req, "#.#") + ")\n" +
+           "IBD RS Rating: " + str.tostring(p_ibd, "#.#") + " / 100\n" +
+           "Pattern: " + p_name + "\n" +
+           "----------------------------------------\n" +
+           "FULFILLED CRITERIA BREAKDOWN:\n" +
+           (market_regime_ok ? "✓ [Gate 0] Market Regime (SPY & QQQ > 50 SMA)\n" : "✗ [Gate 0] Regime Failed\n") +
+           (structure_ok ? "✓ [Gate 1] Structure (50 > 200 SMA, 21 >= 50 - 2.5%)\n" : "✗ [Gate 1] Structure Failed\n") +
+           (s_perf > q_p ? "✓ Stock > QQQ Alpha (+1.0 pt)\n" : "- Stock <= QQQ Alpha (+0.0 pt)\n") +
+           (weekly_ok ? "✓ Weekly MTF (Close > EMA21) (+1.0 pt)\n" : "- Weekly MTF Failed (+0.0 pt)\n") +
+           (monthly_ok ? "✓ Monthly MTF (Close > EMA10) (+1.0 pt)\n" : "- Monthly MTF Failed (+0.0 pt)\n") +
+           (vol_high ? "✓ Volume Expansion (> 21d Avg) (+1.0 pt)\n" : "- Volume Normal (+0.0 pt)\n") +
+           (in_dz ? "✓ Institutional Demand Zone Proximity (+1.0 pt)\n" : "- Outside Demand Zone (+0.0 pt)\n") +
+           (rsi14 > 50.0 ? "✓ RSI(14) Momentum > 50 (+1.0 pt)\n" : "- RSI(14) <= 50 (+0.0 pt)\n") +
+           (pattern_hit ? "✓ Reversal Pattern (" + p_name + ") (+" + str.tostring(pattern_weight, "#.#") + " pt)\n" : "") +
+           (is_touch ? "✓ Key MA Touch Bonus\n" : "") +
+           "----------------------------------------\n" +
+           "EXECUTION PARAMETERS:\n" +
+           "- Entry Price: $" + str.tostring(p_entry, "#.##") + "\n" +
+           "- Initial SL: $" + str.tostring(p_sl, "#.##") + " (-" + str.tostring((p_entry - p_sl) / p_entry * 100.0, "#.#") + "%)\n" +
+           "- Target 1 (+5%): $" + str.tostring(p_entry * (1.0 + target_1_pct), "#.##") + "\n" +
+           "- Target 2 (+10%): $" + str.tostring(p_entry * (1.0 + target_2_pct), "#.##") + "\n" +
+           "- Target 3 (+15%): $" + str.tostring(p_entry * (1.0 + target_3_pct), "#.##") + " (Runner Mode)\n" +
+           "- Dynamic TES: " + str.tostring(tes_base_days) + " Days (+10d extensions if holding EMA21)"
+    hdr + body
+
+// Primary Buy Signal Label (B1)
 if buy_action
+    calculated_sl = pos_entry - math.max(pos_entry * min_sl_pct, math.min(pos_entry * max_sl_pct, atr_multiplier * atr14))
+    b1_tip = build_signal_tooltip(false, score, ibd_rs_rating, pattern_name, close, calculated_sl)
     label_txt = "B1 (" + str.tostring(score, "#.#") + ")\n" + pattern_name
-    tip_txt = "Institutional Entry Verified (v3.2):\n" +
-              "- Score: " + str.tostring(score, "#.#") + " / 5.0\n" +
-              "- Pattern: " + pattern_name + "\n" +
-              "- Initial SL: $" + str.tostring(pos_sl, "#.##") + " (-" + str.tostring((pos_entry - pos_sl)/pos_entry * 100, "#.#") + "%)\n" +
-              "- Weekly MTF: " + (weekly_ok ? "Bullish (Close > EMA21)" : "Failed") + "\n" +
-              "- Relative Strength vs QQQ: " + (s_perf > q_p ? "Outperforming" : "Lagging") + "\n" +
-              "- Demand Zone: " + (in_dz ? "Aligned (Low <= 21d Low * 1.035)" : "Standard")
-    label.new(bar_index, low, label_txt, color=color.green, textcolor=color.white, style=label.style_label_up, size=size.normal, tooltip=tip_txt)
+    label.new(bar_index, low, label_txt, color=color.green, textcolor=color.white, style=label.style_label_up, size=size.normal, tooltip=b1_tip)
 
-// Opportunity Signals (When setup passes all criteria but position is already open)
+// Opportunity Signals (↑OPP): Setup meets all criteria while position is already active
 if candidate_signal and is_valid_signal and in_position and not buy_action
-    label.new(bar_index, low, "OPP\n" + str.tostring(score, "#.#"), color=color.new(color.yellow, 30), textcolor=color.black, style=label.style_arrowup, size=size.small, tooltip="Valid Setup Detected (" + pattern_name + ")\nSkipped: Active B1 position already running")
+    opp_sl = close * (1.0 - fixed_sl_fallback_pct)
+    opp_tip = build_signal_tooltip(true, score, ibd_rs_rating, pattern_name, close, opp_sl)
+    label.new(bar_index, low, "↑OPP\n" + str.tostring(score, "#.#"), color=color.new(color.yellow, 20), textcolor=color.black, style=label.style_arrowup, size=size.normal, tooltip=opp_tip)
 
-// Rejected Signals (Visual Diagnostics)
+// Disqualified Signals (Visual Gate Rejection Audit)
 if candidate_signal and not is_valid_signal
-    label.new(bar_index, high, "REJ\n" + rej_reason, color=color.new(color.red, 40), textcolor=color.white, style=label.style_label_down, size=size.tiny, tooltip="Signal Disqualified by Gate:\n" + rej_reason)
+    rej_tip = "SIGNAL REJECTED BY INSTITUTIONAL GATE:\n" +
+              "- Disqualification Reason: " + rej_reason + "\n" +
+              "- Score: " + str.tostring(score, "#.#") + " / " + str.tostring(min_score_req, "#.#") + "\n" +
+              "- Pattern: " + pattern_name + "\n" +
+              "- Intraday Gap: " + str.tostring(gap_pct * 100.0, "#.#") + "%\n" +
+              "- Trades Executed Today: " + str.tostring(trades_executed_today) + " / " + str.tostring(max_trades_per_day)
+    label.new(bar_index, high, "↓REJ\n" + rej_reason, color=color.new(color.red, 40), textcolor=color.white, style=label.style_label_down, size=size.tiny, tooltip=rej_tip)
 
-// Target Hit Badges
+// Profit Target Badges
 if in_position and pos_t1_hit and not pos_t1_hit[1]
     label.new(bar_index, high, "T1 (+5%)\nScale 20%", color=color.blue, textcolor=color.white, style=label.style_label_down, size=size.tiny)
 if in_position and pos_t2_hit and not pos_t2_hit[1]
     label.new(bar_index, high, "T2 (+10%)\nScale 25%", color=color.purple, textcolor=color.white, style=label.style_label_down, size=size.tiny)
 if in_position and pos_t3_hit and not pos_t3_hit[1]
     label.new(bar_index, high, "T3 (+15%)\nRUNNER MODE", color=color.lime, textcolor=color.black, style=label.style_label_down, size=size.tiny)
+if in_position and pos_t4_hit and not pos_t4_hit[1]
+    label.new(bar_index, high, "T4 (+20%)\nFinal Target", color=color.green, textcolor=color.white, style=label.style_label_down, size=size.tiny)
 
 // ------------------------------------------------------------------------------------------------
-// 9. INSTITUTIONAL HUD DASHBOARD (Top-Right Live Table)
+// 11. BOTTOM MULTI-TIMEFRAME & VOLUME RIBBONS
+// ------------------------------------------------------------------------------------------------
+// Volume Conviction Diamond Color Logic
+diamond_color = color.new(color.gray, 85)
+if (buy_action or is_touch) and vol_conv
+    diamond_color := color.orange
+else if vol_conv and is_green
+    diamond_color := color.blue
+else if vol_high and not is_green
+    diamond_color := color.fuchsia
+
+// Multi-Ribbon Visual Plots at Bottom of Chart
+plotshape(show_weekly_ribbon, title="Weekly Trend (Triangle Up)", location=location.bottom, color=weekly_ok ? color.lime : color.red, style=shape.triangleup, size=size.tiny)
+plotshape(show_monthly_ribbon, title="Monthly Trend (Triangle Down)", location=location.bottom, color=monthly_ok ? color.teal : color.maroon, style=shape.triangledown, size=size.tiny)
+plotshape(show_volume_ribbon, title="Volume Conviction (Diamond)", location=location.bottom, color=diamond_color, style=shape.diamond, size=size.tiny)
+
+// ------------------------------------------------------------------------------------------------
+// 12. INSTITUTIONAL HUD DASHBOARD (Top-Right Live Table)
+// Displays Relative Performance vs Sector/SPY/QQQ, Score, IBD RS, Win Rate %, Active Position
 // ------------------------------------------------------------------------------------------------
 if show_hud_dashboard and barstate.islast
-    var table hud = table.new(position.top_right, 6, 7, bgcolor=color.new(#0d1117, 10), border_width=1, border_color=color.new(#30363d, 0))
+    var table hud = table.new(position.top_right, 9, 3, bgcolor=color.new(#0d1117, 10), border_width=2, border_color=color.new(#30363d, 0))
     
-    // Header
-    table.cell(hud, 0, 0, "RAJAT ALPHA v3.2 HUD", text_color=color.white, text_size=size.small, bgcolor=color.new(#1f6feb, 20))
-    table.cell(hud, 1, 0, "STATUS", text_color=color.white, text_size=size.small, bgcolor=color.new(#1f6feb, 20))
-    table.cell(hud, 2, 0, "ENTRY / SL", text_color=color.white, text_size=size.small, bgcolor=color.new(#1f6feb, 20))
-    table.cell(hud, 3, 0, "STAGE / TES", text_color=color.white, text_size=size.small, bgcolor=color.new(#1f6feb, 20))
+    // Header Row
+    table.cell(hud, 0, 0, "TICKER", text_color=color.white, text_size=size.small, bgcolor=color.new(#1f6feb, 20))
+    table.cell(hud, 1, 0, "vs SECT", text_color=color.white, text_size=size.small, bgcolor=color.new(#1f6feb, 20))
+    table.cell(hud, 2, 0, "vs SPY", text_color=color.white, text_size=size.small, bgcolor=color.new(#1f6feb, 20))
+    table.cell(hud, 3, 0, "vs QQQ", text_color=color.white, text_size=size.small, bgcolor=color.new(#1f6feb, 20))
     table.cell(hud, 4, 0, "SCORE", text_color=color.white, text_size=size.small, bgcolor=color.new(#1f6feb, 20))
-    table.cell(hud, 5, 0, "WIN RATE", text_color=color.white, text_size=size.small, bgcolor=color.new(#1f6feb, 20))
+    table.cell(hud, 5, 0, "IBD RS", text_color=color.white, text_size=size.small, bgcolor=color.new(#1f6feb, 20))
+    table.cell(hud, 6, 0, "WIN RATE", text_color=color.white, text_size=size.small, bgcolor=color.new(#1f6feb, 20))
+    table.cell(hud, 7, 0, "POSITION", text_color=color.white, text_size=size.small, bgcolor=color.new(#1f6feb, 20))
+    table.cell(hud, 8, 0, "STAGE / SL", text_color=color.white, text_size=size.small, bgcolor=color.new(#1f6feb, 20))
     
-    // Row 1: Active Telemetry
+    // Relative Performance Calculations
+    diff_sec = (s_perf - (not na(sec_p) ? sec_p : 0.0)) * 100.0
+    diff_spy = (s_perf - (not na(sp_p) ? sp_p : 0.0)) * 100.0
+    diff_qqq = (s_perf - (not na(q_p) ? q_p : 0.0)) * 100.0
+    
+    sec_str = (diff_sec >= 0 ? "OP +" : "UP ") + str.tostring(diff_sec, "#.#") + "%"
+    spy_str = (diff_spy >= 0 ? "OP +" : "UP ") + str.tostring(diff_spy, "#.#") + "%"
+    qqq_str = (diff_qqq >= 0 ? "OP +" : "UP ") + str.tostring(diff_qqq, "#.#") + "%"
+    
+    sec_bg = diff_sec >= 0 ? color.new(color.green, 40) : color.new(color.red, 40)
+    spy_bg = diff_spy >= 0 ? color.new(color.green, 40) : color.new(color.red, 40)
+    qqq_bg = diff_qqq >= 0 ? color.new(color.green, 40) : color.new(color.red, 40)
+    
+    // Strategy Telemetry
     total_trades = total_wins + total_losses
     wr_pct = total_trades > 0 ? (float(total_wins) / float(total_trades)) * 100.0 : 0.0
     
     pos_status_txt = in_position ? (pos_is_runner ? "RUNNER (30%)" : "ACTIVE (B1)") : "IDLE"
     pos_status_col = in_position ? (pos_is_runner ? color.lime : color.green) : color.gray
     
-    entry_sl_txt = in_position ? ("$" + str.tostring(pos_entry, "#.##") + " / $" + str.tostring(pos_sl, "#.##")) : "N/A"
-    stage_txt    = in_position ? ("Stage " + str.tostring(pos_stage) + " (" + str.tostring(bar_index - pos_bar) + "d)") : "N/A"
+    stage_sl_txt = in_position ? ("Stg " + str.tostring(pos_stage) + " | $" + str.tostring(pos_sl, "#.##")) : "N/A"
     
-    table.cell(hud, 0, 1, syminfo.ticker, text_color=color.yellow, text_size=size.normal)
-    table.cell(hud, 1, 1, pos_status_txt, text_color=color.white, text_size=size.small, bgcolor=color.new(pos_status_col, 50))
-    table.cell(hud, 2, 1, entry_sl_txt, text_color=color.white, text_size=size.small)
-    table.cell(hud, 3, 1, stage_txt, text_color=color.white, text_size=size.small)
-    table.cell(hud, 4, 1, str.tostring(score, "#.#") + " / 5.0", text_color=score >= 4.0 ? color.lime : color.orange, text_size=size.small)
-    table.cell(hud, 5, 1, str.tostring(wr_pct, "#.#") + "% (" + str.tostring(total_wins) + "W/" + str.tostring(total_losses) + "L)", text_color=wr_pct >= 55 ? color.lime : color.orange, text_size=size.small)
+    // Row 1 Values
+    table.cell(hud, 0, 1, syminfo.ticker, text_color=color.yellow, text_size=size.small)
+    table.cell(hud, 1, 1, sec_str, text_color=color.white, text_size=size.small, bgcolor=sec_bg)
+    table.cell(hud, 2, 1, spy_str, text_color=color.white, text_size=size.small, bgcolor=spy_bg)
+    table.cell(hud, 3, 1, qqq_str, text_color=color.white, text_size=size.small, bgcolor=qqq_bg)
+    table.cell(hud, 4, 1, str.tostring(score, "#.#") + " / 7.0", text_color=score >= min_score_req ? color.lime : color.orange, text_size=size.small)
+    table.cell(hud, 5, 1, str.tostring(ibd_rs_rating, "#.#") + " / 100", text_color=ibd_rs_rating >= 70.0 ? color.lime : ibd_rs_rating >= 50.0 ? color.orange : color.red, text_size=size.small)
+    table.cell(hud, 6, 1, str.tostring(wr_pct, "#.#") + "% (" + str.tostring(total_wins) + "W/" + str.tostring(total_losses) + "L)", text_color=wr_pct >= 55.0 ? color.lime : color.orange, text_size=size.small)
+    table.cell(hud, 7, 1, pos_status_txt, text_color=color.white, text_size=size.small, bgcolor=color.new(pos_status_col, 50))
+    table.cell(hud, 8, 1, stage_sl_txt, text_color=color.white, text_size=size.small)
 
 // ------------------------------------------------------------------------------------------------
-// 10. REJECTION & GATE STATISTICS TABLE (Top-Left Table)
+// 13. GATE REJECTION STATISTICS TABLE (Top-Left Table)
 // ------------------------------------------------------------------------------------------------
 if show_stats_table and barstate.islast
-    var table stats = table.new(position.top_left, 2, 6, bgcolor=color.new(#0d1117, 10), border_width=1, border_color=color.new(#30363d, 0))
-    table.cell(stats, 0, 0, "GATE REJECTION STATS", color.yellow, text_size=size.small, bgcolor=color.new(#21262d, 0))
-    table.cell(stats, 1, 0, "COUNT", color.yellow, text_size=size.small, bgcolor=color.new(#21262d, 0))
+    var table stats = table.new(position.top_left, 2, 7, bgcolor=color.new(#0d1117, 10), border_width=1, border_color=color.new(#30363d, 0))
+    table.cell(stats, 0, 0, "GATE REJECTION AUDIT", text_color=color.yellow, text_size=size.small, bgcolor=color.new(#21262d, 0))
+    table.cell(stats, 1, 0, "COUNT", text_color=color.yellow, text_size=size.small, bgcolor=color.new(#21262d, 0))
     
-    table.cell(stats, 0, 1, "Score < 4.0 Filter:", color.white, text_size=size.tiny)
-    table.cell(stats, 1, 1, str.tostring(rej_cnt_score), color.orange, text_size=size.tiny)
+    table.cell(stats, 0, 1, "Market Regime (SPY/QQQ < 50):", text_color=color.white, text_size=size.tiny)
+    table.cell(stats, 1, 1, str.tostring(rej_cnt_regime), text_color=color.orange, text_size=size.tiny)
     
-    table.cell(stats, 0, 2, "Gap > 4% Extended:", color.white, text_size=size.tiny)
-    table.cell(stats, 1, 2, str.tostring(rej_cnt_extended), color.red, text_size=size.tiny)
+    table.cell(stats, 0, 2, "Score < " + str.tostring(min_score_req, "#.#") + " Filter:", text_color=color.white, text_size=size.tiny)
+    table.cell(stats, 1, 2, str.tostring(rej_cnt_score), text_color=color.orange, text_size=size.tiny)
     
-    table.cell(stats, 0, 3, "Shooting Star Wick:", color.white, text_size=size.tiny)
-    table.cell(stats, 1, 3, str.tostring(rej_cnt_star), color.purple, text_size=size.tiny)
+    table.cell(stats, 0, 3, "Gap > " + str.tostring(max_gap_pct * 100.0, "#") + "% Extended:", text_color=color.white, text_size=size.tiny)
+    table.cell(stats, 1, 3, str.tostring(rej_cnt_extended), text_color=color.red, text_size=size.tiny)
     
-    table.cell(stats, 0, 4, "Stalling Consolidation:", color.white, text_size=size.tiny)
-    table.cell(stats, 1, 4, str.tostring(rej_cnt_stall), color.blue, text_size=size.tiny)
+    table.cell(stats, 0, 4, "Shooting Star Upper Wick:", text_color=color.white, text_size=size.tiny)
+    table.cell(stats, 1, 4, str.tostring(rej_cnt_star), text_color=color.purple, text_size=size.tiny)
     
-    table.cell(stats, 0, 5, "Max Trades / Day Reached:", color.white, text_size=size.tiny)
-    table.cell(stats, 1, 5, str.tostring(rej_cnt_trades), color.gray, text_size=size.tiny)
+    table.cell(stats, 0, 5, "Stalling Consolidation:", text_color=color.white, text_size=size.tiny)
+    table.cell(stats, 1, 5, str.tostring(rej_cnt_stall), text_color=color.blue, text_size=size.tiny)
+    
+    table.cell(stats, 0, 6, "Max Daily Trades Reached:", text_color=color.white, text_size=size.tiny)
+    table.cell(stats, 1, 6, str.tostring(rej_cnt_trades), text_color=color.gray, text_size=size.tiny)
 
 // ------------------------------------------------------------------------------------------------
-// 11. TRADINGVIEW NATIVE ALERT CONDITIONS
+// 14. STRATEGY LEGEND TABLE (Bottom-Right Table)
+// ------------------------------------------------------------------------------------------------
+if show_legend_table and barstate.islast
+    var table legend = table.new(position.bottom_right, 2, 11, bgcolor=color.new(#0d1117, 10), border_width=1, border_color=color.new(#30363d, 0))
+    table.cell(legend, 0, 0, "INDICATOR ELEMENT", text_color=color.yellow, text_size=size.tiny, bgcolor=color.new(#21262d, 0))
+    table.cell(legend, 1, 0, "MEANING & BEHAVIOR", text_color=color.yellow, text_size=size.tiny, bgcolor=color.new(#21262d, 0))
+    
+    table.cell(legend, 0, 1, "B1 (Score)", text_color=color.lime, text_size=size.tiny)
+    table.cell(legend, 1, 1, "Primary Automated Buy Entry (Passed all 8 Gates)", text_color=color.white, text_size=size.tiny)
+    
+    table.cell(legend, 0, 2, "↑OPP (Score)", text_color=color.yellow, text_size=size.tiny)
+    table.cell(legend, 1, 2, "Manual Opportunity (Setup valid, B1 already active)", text_color=color.white, text_size=size.tiny)
+    
+    table.cell(legend, 0, 3, "↓REJ (Reason)", text_color=color.red, text_size=size.tiny)
+    table.cell(legend, 1, 3, "Disqualified Candidate (Gate failure reason shown)", text_color=color.white, text_size=size.tiny)
+    
+    table.cell(legend, 0, 4, "TCH Boxes (T1-T4)", text_color=#00e5ff, text_size=size.tiny)
+    table.cell(legend, 1, 4, "Key MA Touches (Cyan=21, Gold=50, Purple=200; Max 4)", text_color=color.white, text_size=size.tiny)
+    
+    table.cell(legend, 0, 5, "Dynamic Stepper", text_color=color.orange, text_size=size.tiny)
+    table.cell(legend, 1, 5, "Trailing SL: Init ATR -> -4% -> BE (0%) -> +3% -> +10%", text_color=color.white, text_size=size.tiny)
+    
+    table.cell(legend, 0, 6, "Targets T1-T4", text_color=color.teal, text_size=size.tiny)
+    table.cell(legend, 1, 6, "+5% (20%), +10% (25%), +15% (25% Runner), +20%", text_color=color.white, text_size=size.tiny)
+    
+    table.cell(legend, 0, 7, "TES (+10d Ext)", text_color=color.blue, text_size=size.tiny)
+    table.cell(legend, 1, 7, "21-Day Time Exit (+10d ext if holding above EMA21)", text_color=color.white, text_size=size.tiny)
+    
+    table.cell(legend, 0, 8, "Ribbon: ▲", text_color=color.lime, text_size=size.tiny)
+    table.cell(legend, 1, 8, "Weekly MTF Trend (Green: Close > EMA21, Red: Below)", text_color=color.white, text_size=size.tiny)
+    
+    table.cell(legend, 0, 9, "Ribbon: ▼", text_color=color.teal, text_size=size.tiny)
+    table.cell(legend, 1, 9, "Monthly MTF Trend (Teal: Close > EMA10, Maroon: Below)", text_color=color.white, text_size=size.tiny)
+    
+    table.cell(legend, 0, 10, "Ribbon: ◆", text_color=color.orange, text_size=size.tiny)
+    table.cell(legend, 1, 10, "Volume Conviction (Orange: Buy Conviction, Blue: Bull Vol)", text_color=color.white, text_size=size.tiny)
+
+// ------------------------------------------------------------------------------------------------
+// 15. TRADINGVIEW NATIVE ALERT CONDITIONS
 // ------------------------------------------------------------------------------------------------
 alertcondition(buy_action, title="[Rajat Alpha v3.2] Buy Signal (B1)", message="Rajat Alpha v3.2 BUY ALERT: {{ticker}} entered at {{close}}. Score: {{plot_0}}")
-alertcondition(in_position and pos_stage > pos_stage[1], title="[Rajat Alpha v3.2] Trailing Stop Stepped", message="Rajat Alpha v3.2 STOP STEPPED: {{ticker}} raised SL to {{plot_3}}")
+alertcondition(candidate_signal and is_valid_signal and in_position and not buy_action, title="[Rajat Alpha v3.2] Discretionary Opportunity (OPP)", message="Rajat Alpha v3.2 OPPORTUNITY ALERT: {{ticker}} qualified at {{close}}. Manual discretionary entry recommended.")
+alertcondition(in_position and pos_stage > pos_stage[1], title="[Rajat Alpha v3.2] Trailing Stop Stepped", message="Rajat Alpha v3.2 STOP STEPPED: {{ticker}} raised SL stage.")
 alertcondition(in_position and pos_t1_hit and not pos_t1_hit[1], title="[Rajat Alpha v3.2] Target 1 Hit (+5%)", message="Rajat Alpha v3.2 TARGET 1 (+5%) HIT: {{ticker}} at {{high}}")
 alertcondition(in_position and pos_t2_hit and not pos_t2_hit[1], title="[Rajat Alpha v3.2] Target 2 Hit (+10%)", message="Rajat Alpha v3.2 TARGET 2 (+10%) HIT: {{ticker}} at {{high}}")
 alertcondition(in_position and pos_t3_hit and not pos_t3_hit[1], title="[Rajat Alpha v3.2] Runner Mode Triggered (+15%)", message="Rajat Alpha v3.2 RUNNER MODE (+15%) TRIGGERED: {{ticker}} at {{high}}")

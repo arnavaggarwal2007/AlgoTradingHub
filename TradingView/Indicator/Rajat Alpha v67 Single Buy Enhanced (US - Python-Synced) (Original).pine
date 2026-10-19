@@ -1,0 +1,629 @@
+//@version=6
+indicator("Rajat Alpha v67 Single Buy Enhanced (US - Python-Synced)", overlay=true, max_boxes_count=300, max_labels_count=500)
+
+// ================================================================================================
+// RAJAT ALPHA V67 SINGLE BUY ENHANCED - PYTHON-SYNCHRONIZED VERSION
+// ================================================================================================
+//
+// PURPOSE:
+// Enhanced indicator synchronized with Alpaca Python implementation (rajat_alpha_v67.py)
+// Adds missing features: Extended Filter, Max Trades Per Day, Smart Execution Window
+//
+// NEW FEATURES (Python-Synced):
+// 1. **Extended Stock Filter**: Rejects stocks gapped >4% from previous close
+// 2. **Max Trades Per Day**: Limits daily signal count (default: 3 trades/day)
+// 3. **Smart 15-Min Execution Window**: Queues signals, executes best N by score
+// 4. **Rejection Counters**: Visual tracking of rejected vs executed signals
+// 5. **Enhanced Stats Dashboard**: Shows filter impact and daily limits
+//
+// CORE STRATEGY LOGIC (Unchanged from v67):
+// 1. **Market Structure**: Requires bullish alignment (50 SMA > 200 SMA, 21 EMA > 50 SMA)
+// 2. **Pullback Detection**: Price retraces to 21 EMA or 50 SMA after uptrend
+// 3. **Pattern Confirmation**: Explosive bullish candle patterns (engulfing/piercing/tweezer)
+// 4. **Multi-Timeframe**: Weekly and monthly EMA confirmation required
+// 5. **Scoring System**: 0-5 base score + touch bonuses (0.5) for strategic entries
+// 6. **Single Position System**: B1 only - subsequent signals show as yellow OPP arrows
+//
+// ENTRY SIGNALS:
+// - **B (B1)**: Primary buy signal when all conditions met (FIRST signal only)
+// - **↑OPP**: Opportunity signal (all criteria met but B1 active - watch only)
+// - **↓REJ**: Rejected signal (failed extended filter, max trades, or execution window)
+// - **TCH 21*/**: First/second touch to 21 EMA in new trend
+// - **TCH 50**/**: First/second touch to 50 SMA in new trend
+//
+// EXIT MANAGEMENT (Unchanged):
+// - **Stop Loss**: Dynamic trailing (initial → tighter at 5% → breakeven at 10%)
+// - **Profit Targets**: 5%, 10%, 15%, 20% (intraday basis)
+// - **Time Exit (TES)**: Configurable max hold days
+//
+// SCORING BREAKDOWN (0-5 + bonuses):
+// +1: Stock outperforming QQQ (21-day basis)
+// +1: Weekly EMA21 bullish
+// +1: Monthly EMA10 bullish  
+// +1: Volume above 21-day average
+// +1: Price in Demand Zone (within 3.5% of 21-day low)
+// +0.5: First or second touch to key EMA (bonus)
+//
+// EXTENDED STOCK FILTER (NEW):
+// - Calculates gap from previous close: (current_price - prev_close) / prev_close
+// - Rejects if gap > max_gap_pct (default: 4%)
+// - Purpose: Avoid buying "run away" stocks, focus on pullback entries
+// - Configurable: enable_extended_filter, max_gap_pct, lookback_for_gap
+//
+// MAX TRADES PER DAY (NEW):
+// - Tracks count of B1 signals executed today
+// - Rejects new signals when count >= max_trades_per_day (default: 3)
+// - Resets at market open each day
+// - Purpose: Prevent overtrading, maintain position limits
+//
+// SMART EXECUTION WINDOW (NEW):
+// - Queues signals for 15 minutes (configurable)
+// - Selects top N signals by score from queue
+// - Executes only best signals when window closes
+// - Purpose: Filter out weaker signals in high-volume periods
+//
+// ================================================================================================
+
+// --- 1. COLORS & THEME ---
+color_pink_bg    = color.new(#ffb3ff, 0), color_orange_bg = color.new(#ffcc80, 0)
+color_red_bg     = color.new(#ff5252, 0), color_blue_bg    = color.new(#448aff, 0)
+color_dz_green   = color.new(#c8e6c9, 30), color_sz_red     = color.new(#ffcdd2, 30)
+color_cyan_light = color.new(#e0ffff, 0)
+color_vol_pink   = color.new(#ff00ff, 0), color_vol_blue   = color.new(#0000ff, 0)
+color_vol_orange = color.new(#ffa500, 0), color_lime_touch = color.new(#32cd32, 0)
+color_table_bg   = color.new(#1a1a1a, 10), color_border     = color.new(color.gray, 20)
+
+// --- 2. INPUTS (Enhanced for Python Sync) ---
+sector_ticker  = input.symbol("BATS:XLK", "Sector ETF", group="General")
+min_listing_days = input.int(200, "Minimum Listing Days (Maturity)", minval=50, maxval=500, group="General")
+
+// *** NEW: EXTENDED STOCK FILTER ***
+enable_extended_filter = input.bool(true, "Enable Extended Stock Filter", group="⭐ NEW: Extended Filter", tooltip="Reject stocks gapped >4% from previous close")
+max_gap_pct = input.float(0.04, "Max Gap % from Previous Close", minval=0.01, maxval=0.20, step=0.01, group="⭐ NEW: Extended Filter", tooltip="Default: 0.04 (4%). Stocks gapping more than this are rejected")
+lookback_for_gap = input.int(1, "Gap Lookback Days", minval=1, maxval=5, group="⭐ NEW: Extended Filter", tooltip="Days to look back for gap calculation (default: 1 = previous close)")
+
+// *** NEW: MAX TRADES PER DAY ***
+enable_max_trades = input.bool(true, "Enable Max Trades Per Day", group="⭐ NEW: Max Trades Filter", tooltip="Limit number of B1 signals per day")
+max_trades_per_day = input.int(3, "Max Trades Per Day", minval=1, maxval=10, group="⭐ NEW: Max Trades Filter", tooltip="Maximum B1 signals allowed in one trading day")
+
+// *** NEW: SMART EXECUTION WINDOW ***
+enable_smart_execution = input.bool(false, "Enable Smart Execution (15-Min Queue)", group="⭐ NEW: Smart Execution", tooltip="Queue signals for 15 minutes, execute only best N by score")
+execution_window_minutes = input.int(15, "Execution Window (Minutes)", minval=5, maxval=60, group="⭐ NEW: Smart Execution", tooltip="How long to queue signals before executing best")
+max_signals_per_window = input.int(1, "Max Signals Per Window", minval=1, maxval=5, group="⭐ NEW: Smart Execution", tooltip="Execute top N signals from queue")
+
+// *** CONFIGURABLE STOP LOSS LEVELS (3-tier dynamic trailing) ***
+sl_pct_initial = input.float(0.17, "Initial Stop Loss %", minval=0.01, maxval=0.50, step=0.01, group="Risk Management", tooltip="Stop loss when position first opens (default 17% below entry)")
+sl_pct_at_5 = input.float(0.09, "Stop Loss % at +5% Profit", minval=0.01, maxval=0.20, step=0.01, group="Risk Management", tooltip="Tighter stop when price is up 5% (default 9% below entry)")
+sl_pct_at_10 = input.float(0.01, "Stop Loss % at +10% Profit", minval=0.00, maxval=0.10, step=0.01, group="Risk Management", tooltip="Near-breakeven stop when price is up 10% (default 1% below entry)")
+
+// *** CONFIGURABLE TIME EXIT SIGNAL (TES) - B1 Only ***
+tes_days_b1 = input.int(21, "B1 Time Exit (Days)", minval=5, maxval=50, group="Risk Management", tooltip="Max days to hold B1 position before exit")
+
+// Pullback & Touch Detection
+pullback_days = input.int(4, "Pullback Detection Days", minval=2, maxval=10, group="Signal Detection")
+pullback_pct = input.float(5.0, "Pullback % Threshold", minval=1.0, maxval=15.0, step=0.5, group="Signal Detection")
+touch_range_above = input.float(2.5, "Touch Range Above EMA %", minval=0.5, maxval=10.0, step=0.5, group="Signal Detection")
+touch_range_below = input.float(6.0, "Touch Range Below EMA %", minval=1.0, maxval=15.0, step=0.5, group="Signal Detection")
+
+// Stalling Detection
+stalling_days_long = input.int(8, "Stalling Check Period (Days)", minval=5, maxval=15, group="Signal Detection")
+stalling_days_short = input.int(3, "Consolidation Period (Days)", minval=2, maxval=5, group="Signal Detection")
+stalling_range_pct = input.float(5.0, "Stalling Range %", minval=2.0, maxval=10.0, step=0.5, group="Signal Detection")
+
+// Score Thresholds
+score_touch_bonus = input.float(0.5, "Touch Signal Bonus", minval=0.1, maxval=1.0, step=0.1, group="Scoring", tooltip="Bonus points added for first/second touch to key EMAs")
+
+// *** CONFIGURABLE LEGEND DISPLAY ***
+show_legend = input.bool(true, "Show Legend Table", group="Display")
+legend_position = input.string("bottom_right", "Legend Position", options=["top_right", "top_left", "bottom_right", "bottom_left"], group="Display")
+legend_font_size = input.string("normal", "Legend Font Size", options=["tiny", "small", "normal", "large"], group="Display", tooltip="Adjust legend readability")
+
+// *** NEW: STATS DISPLAY OPTIONS ***
+show_rejection_stats = input.bool(true, "Show Rejection Stats", group="Display", tooltip="Display daily rejection counters (extended filter, max trades, execution window)")
+
+// --- 3. CORE INDICATORS ---
+ema21 = ta.ema(close, 21)
+sma50 = ta.sma(close, 50)
+sma200 = ta.sma(close, 200)
+
+vol_sma21 = ta.sma(volume, 21)
+vol_high = volume > vol_sma21
+vol_conv = volume > (vol_sma21 * 1.5)
+
+is_mature = (bar_index + 1) >= min_listing_days
+
+weekly_ok  = request.security(syminfo.tickerid, "W", close > ta.ema(close, 21))
+monthly_ok = request.security(syminfo.tickerid, "M", close > ta.ema(close, 10))
+
+// --- 4. INSTITUTIONAL ZONES (3.5% DZ / 5% SZ) ---
+low_21 = ta.lowest(low, 21), high_21 = ta.highest(high, 21)
+in_dz = low <= (low_21 * 1.035)
+in_sz = high >= (high_21 * 0.95)
+
+if barstate.islast
+    box.new(bar_index - 21, low_21 * 1.035, bar_index + 5, low_21, bgcolor=color_dz_green, border_color=color.green, text="DZ", text_halign=text.align_right)
+    box.new(bar_index - 21, high_21, bar_index + 5, high_21 * 0.95, bgcolor=color_sz_red, border_color=color.red, text="SZ", text_halign=text.align_right)
+
+// Round Number Logic
+is_round(p) =>
+    res = false
+    levels = array.from(50, 100, 200, 500, 1000)
+    for i = 0 to array.size(levels) - 1
+        level = array.get(levels, i)
+        if math.abs(p - level) / level <= 0.01
+            res := true
+            break
+    res
+
+// --- 5. PATTERN RECOGNITION ---
+is_green = close > open
+
+is_engulfing = close >= open[1] and close[1] < open[1]
+
+midpoint = (open[1] + close[1]) / 2
+is_classic_piercing = close > midpoint and close < open[1] and close[1] < open[1]
+candle_range = high - low
+body_size    = close - open
+is_explosive = candle_range > 0 ? (body_size / candle_range) >= 0.40 : false
+is_piercing = is_classic_piercing and is_explosive
+
+is_tweezer = math.abs(low - low[1]) <= (low * 0.002) and close[1] < open[1]
+
+pattern_hit = is_green and (is_engulfing or is_piercing or is_tweezer)
+
+// --- 6. ENHANCED PULLBACK & STALLING DETECTION ---
+var int downtrend_count = 0
+downtrend_count := 0
+for i = 1 to pullback_days
+    if close[i] < close[i + 1]
+        downtrend_count := downtrend_count + 1
+
+is_downtrend = downtrend_count >= pullback_days
+is_sharp_decline = close[1] > 0 ? ((close[1] - close) / close[1] * 100 >= pullback_pct) : false
+
+dist_from_ema21 = math.abs(close - ema21) / ema21 * 100
+is_above_ema21 = close > ema21
+is_near_ema21_above = is_above_ema21 and dist_from_ema21 <= touch_range_above
+is_near_ema21_below = not is_above_ema21 and dist_from_ema21 <= touch_range_below
+is_near_ema21 = is_near_ema21_above or is_near_ema21_below
+
+is_pullback_enhanced = (is_downtrend or is_sharp_decline) and is_near_ema21 and pattern_hit
+
+range_long = ta.highest(high, stalling_days_long) - ta.lowest(low, stalling_days_long)
+avg_price_long = (ta.highest(high, stalling_days_long) + ta.lowest(low, stalling_days_long)) / 2
+is_stalling_long = avg_price_long > 0 ? (range_long / avg_price_long * 100) <= stalling_range_pct : false
+
+range_short = ta.highest(high, stalling_days_short) - ta.lowest(low, stalling_days_short)
+avg_price_short = (ta.highest(high, stalling_days_short) + ta.lowest(low, stalling_days_short)) / 2
+is_consolidating = avg_price_short > 0 ? (range_short / avg_price_short * 100) <= stalling_range_pct : false
+
+no_stalling = not is_stalling_long or is_consolidating
+
+// --- 7. NEW FILTERS ---
+
+// *** EXTENDED STOCK FILTER (Python-Synced) ***
+var float prev_close_for_gap = close[lookback_for_gap]
+prev_close_for_gap := close[lookback_for_gap]
+gap_pct = prev_close_for_gap > 0 ? (close - prev_close_for_gap) / prev_close_for_gap : 0.0
+is_extended = enable_extended_filter and (gap_pct > max_gap_pct)
+
+// *** MAX TRADES PER DAY (Python-Synced) ***
+var int trades_today = 0
+var int last_trade_day = 0
+
+// Reset counter at start of new trading day
+if dayofweek != dayofweek[1] or (time - time[1]) > 86400000  // New day or >24h gap
+    trades_today := 0
+    last_trade_day := dayofmonth
+
+max_trades_reached = enable_max_trades and (trades_today >= max_trades_per_day)
+
+// *** SMART EXECUTION WINDOW (Simplified PineScript Version) ***
+// Note: Full queue implementation not possible in PineScript (no dynamic arrays per bar)
+// This version uses a simplified approach: track time since first signal
+var float first_signal_time = na
+var float first_signal_score = na
+var bool in_execution_window = false
+
+// Execution window logic (reset after window expires)
+execution_window_ms = execution_window_minutes * 60 * 1000
+if not na(first_signal_time) and (time - first_signal_time) >= execution_window_ms
+    first_signal_time := na
+    first_signal_score := na
+    in_execution_window := false
+
+// --- 8. TRIGGERS ---
+is_pullback = ta.highest(high, 4)[1] > high
+near_ma = (math.abs(close - ema21) / ema21 <= 0.025) or (math.abs(close - sma50) / sma50 <= 0.025)
+
+x_ema21 = ta.crossunder(low, ema21)
+x_sma50 = ta.crossunder(low, sma50)
+
+// *** PRIMARY BUY TRIGGER (Unchanged from v67) ***
+buy_trigger = (sma50 > sma200) and (ema21 > sma50) and (near_ma or is_pullback_enhanced) and is_pullback and pattern_hit and weekly_ok and is_mature and no_stalling
+
+// Touch signal conditions
+all_above_200 = (close >= sma200) and (ema21 >= sma200) and (sma50 >= sma200)
+is_touch_signal = (x_ema21 or x_sma50) and is_green and all_above_200 and weekly_ok and is_mature
+
+bull_50 = ta.rising(sma50, 2)
+bull_200 = ta.rising(sma200, 2)
+
+// Volume Diamond Color
+diamond_color = color.new(color.gray, 90)
+if (buy_trigger or is_touch_signal) and vol_conv
+    diamond_color := color_vol_orange
+else if vol_conv and is_green
+    diamond_color := color_vol_blue
+else if vol_high and not is_green
+    diamond_color := color_vol_pink
+
+plotshape(true, title="Weekly Ribbon", location=location.bottom, color=weekly_ok ? color.lime : color.red, style=shape.square, size=size.small)
+plotshape(true, title="Vol Diamond", location=location.bottom, color=diamond_color, style=shape.diamond, size=size.small)
+
+// --- 9. SCORING & PERFORMANCE ---
+s_perf = (close - close[21]) / close[21]
+q_p   = request.security("BATS:QQQ", "D", (close - close[21]) / close[21])
+sp_p  = request.security("BATS:SPY", "D", (close - close[21]) / close[21])
+sec_p = request.security(sector_ticker, "D", (close - close[21]) / close[21])
+
+var int t_wins = 0, var int t_losses = 0
+
+prob_score = 0
+prob_score := prob_score + (s_perf > q_p ? 1 : 0)
+prob_score := prob_score + (weekly_ok ? 1 : 0)
+prob_score := prob_score + (monthly_ok ? 1 : 0)
+prob_score := prob_score + (vol_high ? 1 : 0)
+prob_score := prob_score + (in_dz ? 1 : 0)
+
+has_round = is_round(close)
+var score_str = ""
+
+// --- 10. INSTITUTIONAL HOUR CHECK ---
+is_inst_hour = true
+if timeframe.isintraday
+    current_time = time(timeframe.period, "0930-1600:23456", "America/New_York")
+    inst_hour_start = timestamp("America/New_York", year, month, dayofmonth, 15, 0)
+    is_inst_hour := time >= inst_hour_start and not na(current_time)
+
+// --- 11. TOUCH SIGNAL TRACKING ---
+var bool new_trend = false
+var int touch_ema21_count = 0
+var int touch_sma50_count = 0
+
+if ta.crossover(sma50, sma200)
+    new_trend := true
+    touch_ema21_count := 0
+    touch_sma50_count := 0
+
+touch_ema21 = x_ema21 and is_green and all_above_200 and weekly_ok and is_mature
+touch_sma50 = x_sma50 and is_green and all_above_200 and weekly_ok and is_mature
+touch_sma200 = (low <= sma200 and close > sma200) and is_green and weekly_ok and is_mature and (sma200 < ema21) and (sma200 < sma50)
+
+ema21_stars = touch_ema21_count == 0 ? "*" : touch_ema21_count == 1 ? "**" : ""
+sma50_stars = touch_sma50_count == 0 ? "*" : touch_sma50_count == 1 ? "**" : ""
+
+var float score_bonus = 0.0
+var bool touch_is_buy_ema21 = false
+var bool touch_is_buy_sma50 = false
+
+touch_is_buy_ema21 := touch_ema21 and buy_trigger
+touch_is_buy_sma50 := touch_sma50 and buy_trigger
+
+score_bonus := 0.0
+if touch_is_buy_ema21 or touch_is_buy_sma50
+    if (touch_ema21_count <= 1) or (touch_sma50_count <= 1)
+        score_bonus := score_touch_bonus
+
+// *** FINAL SCORE CALCULATION ***
+final_score = float(prob_score) + score_bonus
+score_str := score_bonus > 0 ? str.tostring(final_score, "#.#") : str.tostring(prob_score)
+if has_round and score_bonus == 0
+    score_str := score_str + "*"
+
+// --- 12. NEW REJECTION TRACKING ---
+var int rejected_extended = 0     // Rejected due to gap >4%
+var int rejected_max_trades = 0   // Rejected due to daily limit
+var int rejected_execution = 0    // Rejected by smart execution window
+var int total_signals_today = 0   // Total valid signals generated
+var int executed_today = 0        // Actually executed (B1 entries)
+
+// Reset rejection counters daily
+if dayofweek != dayofweek[1] or (time - time[1]) > 86400000
+    rejected_extended := 0
+    rejected_max_trades := 0
+    rejected_execution := 0
+    total_signals_today := 0
+    executed_today := 0
+
+// --- 13. TRADE ENGINE (SINGLE BUY WITH REJECTION LOGIC) ---
+var float entry_p1 = na, var float sl_p1 = na, var int entry_idx1 = 0, var bool active1 = false
+var bool tp10_hit1 = false, var bool tp15_hit1 = false, var bool tp20_hit1 = false
+
+// *** ENHANCED SIGNAL LOGIC WITH FILTERS ***
+// Step 1: Check base conditions (buy_trigger or touch_signal)
+is_base_signal = (buy_trigger or is_touch_signal) and is_inst_hour and no_stalling
+
+// Step 2: Apply NEW filters and track rejections
+var bool passed_filters = false
+var string rejection_reason = ""
+
+if is_base_signal
+    total_signals_today := total_signals_today + 1
+    passed_filters := true
+    rejection_reason := ""
+    
+    // Filter 1: Extended Stock Check
+    if is_extended
+        passed_filters := false
+        rejection_reason := "GAP>" + str.tostring(max_gap_pct * 100, "#.#") + "%"
+        rejected_extended := rejected_extended + 1
+    
+    // Filter 2: Max Trades Check (only if passed extended filter)
+    if passed_filters and max_trades_reached
+        passed_filters := false
+        rejection_reason := "MAX_TRADES"
+        rejected_max_trades := rejected_max_trades + 1
+    
+    // Filter 3: Smart Execution Window (only if passed other filters)
+    if passed_filters and enable_smart_execution
+        // Simplified: Compare score to threshold or track first signal
+        if na(first_signal_time)
+            first_signal_time := time
+            first_signal_score := final_score
+            in_execution_window := true
+        else if in_execution_window
+            // Still in window - queue signal (simplified: just compare scores)
+            if final_score < first_signal_score
+                passed_filters := false
+                rejection_reason := "EXEC_QUEUE"
+                rejected_execution := rejected_execution + 1
+
+// Step 3: Final signal determination
+is_signal = is_base_signal and passed_filters
+is_opp_signal = is_base_signal and passed_filters and active1
+is_rejected_signal = is_base_signal and not passed_filters
+
+// --- 14. TOUCH SIGNAL LABELS (Unchanged) ---
+var string touch_label_text = ""
+var bool has_touch_label = false
+
+touch_label_text := ""
+has_touch_label := false
+
+if touch_ema21 and not touch_is_buy_ema21 and is_inst_hour
+    touch_ema21_count := touch_ema21_count + 1
+    touch_label_text := touch_label_text + (has_touch_label ? "\n" : "") + "TCH 21" + ema21_stars
+    has_touch_label := true
+
+if touch_sma50 and not touch_is_buy_sma50 and is_inst_hour
+    touch_sma50_count := touch_sma50_count + 1
+    touch_label_text := touch_label_text + (has_touch_label ? "\n" : "") + "TCH 50" + sma50_stars
+    has_touch_label := true
+
+if touch_sma200 and is_inst_hour
+    touch_label_text := touch_label_text + (has_touch_label ? "\n" : "") + "TH"
+    has_touch_label := true
+
+if has_touch_label
+    label.new(bar_index, low, touch_label_text, color=color.new(color.blue, 60), textcolor=color.white, style=label.style_label_up, size=size.small)
+
+// --- 15. BUY SIGNAL LABELS WITH ENHANCED TOOLTIPS ---
+var string buy_explanation = ""
+
+if is_signal or is_rejected_signal
+    buy_explanation := "BUY LOGIC:\n"
+    buy_explanation := buy_explanation + "Score: " + score_str + "/5\n"
+    buy_explanation := buy_explanation + "- Stock > QQQ: " + (s_perf > q_p ? "✓" : "✗") + "\n"
+    buy_explanation := buy_explanation + "- Weekly OK: " + (weekly_ok ? "✓" : "✗") + "\n"
+    buy_explanation := buy_explanation + "- Monthly OK: " + (monthly_ok ? "✓" : "✗") + "\n"
+    buy_explanation := buy_explanation + "- Volume High: " + (vol_high ? "✓" : "✗") + "\n"
+    buy_explanation := buy_explanation + "- In DZ: " + (in_dz ? "✓" : "✗") + "\n"
+    if score_bonus > 0
+        buy_explanation := buy_explanation + "- Touch Bonus: +" + str.tostring(score_bonus, "#.#") + "\n"
+    buy_explanation := buy_explanation + "Pattern: " + (is_engulfing ? "Engulfing" : is_piercing ? "Piercing" : is_tweezer ? "Tweezer" : "Other") + "\n"
+    
+    // Add filter status
+    if is_rejected_signal
+        buy_explanation := buy_explanation + "\n*** REJECTED ***\n"
+        buy_explanation := buy_explanation + "Reason: " + rejection_reason + "\n"
+        if is_extended
+            buy_explanation := buy_explanation + "Gap: " + str.tostring(gap_pct * 100, "#.##") + "%\n"
+        if max_trades_reached
+            buy_explanation := buy_explanation + "Trades Today: " + str.tostring(trades_today) + "/" + str.tostring(max_trades_per_day) + "\n"
+    else if is_opp_signal
+        buy_explanation := buy_explanation + "\nOPPORTUNITY:\n"
+        buy_explanation := buy_explanation + "- B1 Active ✓\n"
+        buy_explanation := buy_explanation + "- Cannot add position"
+    
+    if not active1 and is_signal
+        // *** B1 ENTRY (Passed all filters) ***
+        active1 := true
+        entry_p1 := close
+        sl_p1 := entry_p1 * (1 - sl_pct_initial)
+        entry_idx1 := bar_index
+        trades_today := trades_today + 1
+        executed_today := executed_today + 1
+        
+        touch_marker = ""
+        if touch_is_buy_ema21
+            touch_ema21_count := touch_ema21_count + 1
+            touch_marker := " #TCH21" + ema21_stars
+        else if touch_is_buy_sma50
+            touch_sma50_count := touch_sma50_count + 1
+            touch_marker := " #TCH50" + sma50_stars
+        
+        label.new(bar_index, low, "B " + score_str + touch_marker, color=color.green, textcolor=color.white, style=label.style_label_up, tooltip=buy_explanation)
+
+// *** OPPORTUNITY SIGNAL (Yellow Arrow) ***
+if is_opp_signal
+    label.new(bar_index, low, "OPP", color=color.yellow, textcolor=color.black, style=label.style_arrowup, size=size.normal, tooltip=buy_explanation)
+
+// *** NEW: REJECTED SIGNAL (Red Down Arrow) ***
+if is_rejected_signal
+    label.new(bar_index, high, "REJ\n" + rejection_reason, color=color.new(color.red, 60), textcolor=color.white, style=label.style_label_down, size=size.small, tooltip=buy_explanation)
+
+// --- 16. PROFIT TARGETS & EXIT MANAGEMENT (Unchanged) ---
+var bool tp5_hit1 = false
+
+if active1
+    days_in1 = bar_index - entry_idx1
+    
+    if high >= entry_p1 * 1.10
+        sl_p1 := math.max(sl_p1, entry_p1 * (1 + sl_pct_at_10))
+    else if high >= entry_p1 * 1.05
+        sl_p1 := math.max(sl_p1, entry_p1 * (1 - sl_pct_at_5))
+
+    if not tp5_hit1 and high >= entry_p1 * 1.05
+        tp5_hit1 := true
+        label.new(bar_index, high, "5S", color=color_blue_bg)
+        
+    if not tp10_hit1 and high >= entry_p1 * 1.10
+        tp10_hit1 := true
+        label.new(bar_index, high, "10S", color=color_pink_bg)
+        
+    if not tp15_hit1 and high >= entry_p1 * 1.15
+        tp15_hit1 := true
+        label.new(bar_index, high, "15S", color=color_orange_bg)
+        
+    if not tp20_hit1 and high >= entry_p1 * 1.20
+        tp20_hit1 := true
+        label.new(bar_index, high, "20S", color=color_red_bg)
+    
+    sl_hit1 = close <= sl_p1
+    tes_hit1 = days_in1 == tes_days_b1
+    
+    if sl_hit1 or tes_hit1 or tp20_hit1
+        if close > entry_p1
+            t_wins += 1
+        else
+            t_losses += 1
+        
+        label.new(bar_index, high, sl_hit1 ? "SL" : tes_hit1 ? "TES" : "20S", color=color.black, textcolor=color.white)
+        
+        active1 := false
+        tp5_hit1 := false
+        tp10_hit1 := false
+        tp15_hit1 := false
+        tp20_hit1 := false
+
+// --- 17. VISUALS & DASHBOARD ---
+plot(active1 ? sl_p1 : na, "SL 1", color=color.red, style=plot.style_linebr)
+
+win_rate = (t_wins + t_losses) > 0 ? (float(t_wins) / float(t_wins + t_losses)) * 100 : 0
+
+// *** ENHANCED PERFORMANCE DASHBOARD (Top Right) ***
+var table tab = table.new(position.top_right, 9, 5, bgcolor=color_table_bg, border_width=2, border_color=color_border)
+if barstate.islast
+    diff_sec = (s_perf - sec_p) * 100
+    diff_spy = (s_perf - sp_p) * 100
+    diff_qqq = (s_perf - q_p) * 100
+    
+    table.cell(tab, 0, 3, "Stock", text_color=color.white, bgcolor=color.gray)
+    table.cell(tab, 1, 3, "vs Sect", text_color=color.white, bgcolor=color.gray)
+    table.cell(tab, 2, 3, "vs SPY", text_color=color.white, bgcolor=color.gray)
+    table.cell(tab, 3, 3, "vs QQQ", text_color=color.white, bgcolor=color.gray)
+    table.cell(tab, 4, 3, "50MA", text_color=color.white, bgcolor=color.gray)
+    table.cell(tab, 5, 3, "200MA", text_color=color.white, bgcolor=color.gray)
+    table.cell(tab, 6, 3, "Score", text_color=color.white, bgcolor=color.gray)
+    table.cell(tab, 7, 3, "W/L %", text_color=color.white, bgcolor=color.gray)
+    table.cell(tab, 8, 3, "Maturity", text_color=color.white, bgcolor=color.gray)
+    
+    table.cell(tab, 0, 4, syminfo.ticker, text_color=color_cyan_light)
+    table.cell(tab, 1, 4, (diff_sec > 0 ? "OP " : "UP ") + str.tostring(math.round(diff_sec,1)) + "%", bgcolor=diff_sec > 0 ? color.new(color.green, 20) : color.new(color.red, 20))
+    table.cell(tab, 2, 4, (diff_spy > 0 ? "OP " : "UP ") + str.tostring(math.round(diff_spy,1)) + "%", bgcolor=diff_spy > 0 ? color.new(color.green, 20) : color.new(color.red, 20))
+    table.cell(tab, 3, 4, (diff_qqq > 0 ? "OP " : "UP ") + str.tostring(math.round(diff_qqq,1)) + "%", bgcolor=diff_qqq > 0 ? color.new(color.green, 20) : color.new(color.red, 20))
+    table.cell(tab, 4, 4, bull_50 ? "BULL" : "BEAR", text_color=bull_50 ? color.lime : color.red)
+    table.cell(tab, 5, 4, bull_200 ? "BULL" : "BEAR", text_color=bull_200 ? color.lime : color.red)
+    table.cell(tab, 6, 4, score_str + "/5", bgcolor=final_score >= 4 ? color.green : color.red)
+    table.cell(tab, 7, 4, str.tostring(math.round(win_rate, 1)) + "%", bgcolor=win_rate > 50 ? color.new(color.green, 40) : color.new(color.orange, 40))
+    table.cell(tab, 8, 4, is_mature ? "Mature" : "New Issue", text_color=is_mature ? color.lime : color.orange)
+
+// --- 18. NEW: REJECTION STATS TABLE ---
+if show_rejection_stats
+    var table stats = table.new(position.top_left, 2, 7, bgcolor=color_table_bg, border_width=2, border_color=color_border)
+    if barstate.islast
+        table.cell(stats, 0, 0, "📊 FILTER STATS", text_color=color.yellow, bgcolor=color.gray)
+        table.cell(stats, 1, 0, "", bgcolor=color.gray)
+        
+        table.cell(stats, 0, 1, "Total Signals:", text_color=color.white)
+        table.cell(stats, 1, 1, str.tostring(total_signals_today), text_color=color_cyan_light)
+        
+        table.cell(stats, 0, 2, "Executed (B1):", text_color=color.white)
+        table.cell(stats, 1, 2, str.tostring(executed_today), text_color=color.lime)
+        
+        table.cell(stats, 0, 3, "Gap >4% Reject:", text_color=color.white)
+        table.cell(stats, 1, 3, str.tostring(rejected_extended), text_color=color.red)
+        
+        table.cell(stats, 0, 4, "Max Trades Reject:", text_color=color.white)
+        table.cell(stats, 1, 4, str.tostring(rejected_max_trades), text_color=color.orange)
+        
+        table.cell(stats, 0, 5, "Exec Window Reject:", text_color=color.white)
+        table.cell(stats, 1, 5, str.tostring(rejected_execution), text_color=color.purple)
+        
+        acceptance_rate = total_signals_today > 0 ? (float(executed_today) / float(total_signals_today)) * 100 : 0
+        table.cell(stats, 0, 6, "Acceptance Rate:", text_color=color.white)
+        table.cell(stats, 1, 6, str.tostring(math.round(acceptance_rate, 1)) + "%", bgcolor=acceptance_rate >= 50 ? color.new(color.green, 40) : color.new(color.red, 40))
+
+// --- 19. LEGEND TABLE (Enhanced) ---
+if show_legend
+    legend_pos = legend_position == "top_right" ? position.top_right : 
+                 legend_position == "top_left" ? position.top_left : 
+                 legend_position == "bottom_right" ? position.bottom_right : 
+                 position.bottom_left
+    
+    font_size_header = legend_font_size == "large" ? size.normal : 
+                       legend_font_size == "normal" ? size.small : 
+                       legend_font_size == "small" ? size.tiny : size.auto
+    font_size_body = legend_font_size == "large" ? size.small : 
+                     legend_font_size == "normal" ? size.tiny : 
+                     legend_font_size == "small" ? size.auto : size.auto
+    
+    // ENHANCED: 14 rows (added REJ signals)
+    var table legend = table.new(legend_pos, 2, 14, bgcolor=color_table_bg, border_width=1, border_color=color_border)
+    
+    if barstate.islast
+        table.cell(legend, 0, 0, "Symbol", text_color=color.yellow, bgcolor=color.gray, text_size=font_size_header)
+        table.cell(legend, 1, 0, "Meaning", text_color=color.yellow, bgcolor=color.gray, text_size=font_size_header)
+        
+        table.cell(legend, 0, 1, "B", text_color=color.lime, text_size=font_size_body)
+        table.cell(legend, 1, 1, "Buy Signal (Passed Filters)", text_color=color.white, text_size=font_size_body)
+        
+        table.cell(legend, 0, 2, "↑OPP", text_color=color.yellow, text_size=font_size_body)
+        table.cell(legend, 1, 2, "Opportunity (B1 active)", text_color=color.white, text_size=font_size_body)
+        
+        // NEW: Rejection signal
+        table.cell(legend, 0, 3, "↓REJ", text_color=color.red, text_size=font_size_body)
+        table.cell(legend, 1, 3, "Rejected (Gap/Max/Exec)", text_color=color.white, text_size=font_size_body)
+        
+        table.cell(legend, 0, 4, "TCH 21*", text_color=color.blue, text_size=font_size_body)
+        table.cell(legend, 1, 4, "1st Touch 21 EMA", text_color=color.white, text_size=font_size_body)
+        
+        table.cell(legend, 0, 5, "TCH 50**", text_color=color.purple, text_size=font_size_body)
+        table.cell(legend, 1, 5, "2nd Touch 50 SMA", text_color=color.white, text_size=font_size_body)
+        
+        table.cell(legend, 0, 6, "TH", text_color=color.orange, text_size=font_size_body)
+        table.cell(legend, 1, 6, "200 SMA Touch", text_color=color.white, text_size=font_size_body)
+        
+        table.cell(legend, 0, 7, "5S/10S", text_color=color.blue, text_size=font_size_body)
+        table.cell(legend, 1, 7, "Profit Targets 5%/10%", text_color=color.white, text_size=font_size_body)
+        
+        table.cell(legend, 0, 8, "15S/20S", text_color=color.orange, text_size=font_size_body)
+        table.cell(legend, 1, 8, "Profit Targets 15%/20%", text_color=color.white, text_size=font_size_body)
+        
+        table.cell(legend, 0, 9, "SL", text_color=color.red, text_size=font_size_body)
+        table.cell(legend, 1, 9, "Stop Loss Hit (Close)", text_color=color.white, text_size=font_size_body)
+        
+        table.cell(legend, 0, 10, "TES", text_color=color.gray, text_size=font_size_body)
+        table.cell(legend, 1, 10, "Time Exit (" + str.tostring(tes_days_b1) + " days)", text_color=color.white, text_size=font_size_body)
+        
+        table.cell(legend, 0, 11, "X.X", text_color=color.lime, text_size=font_size_body)
+        table.cell(legend, 1, 11, "Score (+" + str.tostring(score_touch_bonus, "#.#") + " touch bonus)", text_color=color.white, text_size=font_size_body)
+        
+        table.cell(legend, 0, 12, "Patterns", text_color=color.aqua, text_size=font_size_body)
+        table.cell(legend, 1, 12, "Engulfing/Piercing/Tweezer", text_color=color.white, text_size=font_size_body)
+        
+        // NEW: Filter info
+        table.cell(legend, 0, 13, "Filters", text_color=color.aqua, text_size=font_size_body)
+        table.cell(legend, 1, 13, "Gap/MaxTrades/ExecWindow", text_color=color.white, text_size=font_size_body)
+

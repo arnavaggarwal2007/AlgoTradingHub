@@ -14,7 +14,7 @@ TradingView/
 ├── Indicator/
 │   └── Rajat Alpha v67 Single Buy v3.2 (Institutional Swing Engine).pine  # Visual Indicator & Alerts Engine
 └── Strategy/
-    └── Rajat Alpha v67 Single Buy Strategy v3.2.pine                     # Strategy Engine for Strategy Tester
+    └── Rajat Alpha v67 Single Buy v3.2 (Institutional Swing Engine) stgy.pine    # Strategy Engine for Strategy Tester
 ```
 
 ---
@@ -98,7 +98,7 @@ Directly mirrors lines 947–988 of `rajat_alpha_v67_single.py`:
 
 ### Option 2: Running the Backtesting Strategy (`Strategy/`)
 1. In the Pine Editor, open a new tab.
-2. Open [`TradingView/Strategy/Rajat Alpha v67 Single Buy Strategy v3.2.pine`](file:///C:/Alpaca_Algo2.0/Single_Buy2.0/TradingView/Strategy/Rajat%20Alpha%20v67%20Single%20Buy%20Strategy%20v3.2.pine).
+2. Open [`TradingView/Strategy/Rajat Alpha v67 Single Buy v3.2 (Institutional Swing Engine) stgy.pine`](file:///C:/Alpaca_Algo2.0/Single_Buy2.0/TradingView/Strategy/Rajat%20Alpha%20v67%20Single%20Buy%20v3.2%20%28Institutional%20Swing%20Engine%29%20stgy.pine).
 3. Copy and paste the strategy code into the Pine Editor.
 4. Click **Save** and **Add to chart**.
 5. Switch to the **Strategy Tester** tab at the bottom to inspect:

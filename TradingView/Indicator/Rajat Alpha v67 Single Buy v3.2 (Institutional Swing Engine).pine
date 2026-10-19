@@ -136,13 +136,14 @@ show_ma_lines           = input.bool(true, "Show Moving Average Lines (EMA21, SM
 show_custom_ma          = input.bool(true, "Show Custom Moving Average (SMA/EMA)", group=grp_vis)
 custom_ma_type          = input.string("SMA", "Custom MA Type", options=["SMA", "EMA"], group=grp_vis)
 custom_ma_len           = input.int(100, "Custom MA Lookback Period (e.g. 100 or 150)", minval=5, maxval=500, group=grp_vis)
-custom_ma_color         = input.color(color.new(#ff9800, 0), "Custom MA Line Color", group=grp_vis)
+custom_ma_color         = input.color(color.new(#1565c0, 0), "Custom MA Line Color (Dark Blue)", group=grp_vis)
 show_target_lines       = input.bool(true, "Show Projected Target Levels (T1, T2, T3, T4*)", group=grp_vis)
 show_stepper_levels     = input.bool(true, "Show Dynamic Trailing Stop Stepper Line", group=grp_vis)
 show_pattern_bars       = input.bool(true, "Colorize Setup Candles by Pattern", group=grp_vis)
 show_zones              = input.bool(true, "Show Demand (DZ) and Supply (SZ) Zones", group=grp_vis)
 show_volume_v_marker    = input.bool(true, "Show Volume Surge 'V' Badge with Tooltip", group=grp_vis)
-vol_v_threshold_pct     = input.float(1.2, "Volume Surge Multiplier vs 21d Avg (1.2 = +20%)", minval=1.0, maxval=3.0, step=0.1, group=grp_vis)
+vol_v_prev_day_pct      = input.float(50.0, "Volume vs Prev Day % Trigger (Default: +50%)", minval=10.0, maxval=200.0, step=5.0, group=grp_vis, tooltip="Triggers 'V' badge when volume is greater than this % over previous day")
+vol_v_21d_pct           = input.float(30.0, "Volume vs 21d Avg % Trigger (Significantly Increased/Decreased %)", minval=10.0, maxval=150.0, step=5.0, group=grp_vis, tooltip="Triggers 'V' badge when volume is significantly increased or decreased (+/- this %) vs 21d average volume")
 show_weekly_ribbon      = input.bool(true, "Show Bottom Ribbon: Weekly Trend (Triangle Up)", group=grp_vis)
 show_monthly_ribbon     = input.bool(true, "Show Bottom Ribbon: Monthly Trend (Triangle Down)", group=grp_vis)
 show_volume_ribbon      = input.bool(true, "Show Bottom Ribbon: Volume Conviction (Diamond)", group=grp_vis)
@@ -276,15 +277,22 @@ pattern_weight = is_engulfing or is_piercing ? score_pattern_tierA_w : is_hammer
 // ------------------------------------------------------------------------------------------------
 structure_ok = not na(sma50) and not na(sma200) ? ((sma50 > sma200) and (close > sma200) and (ema21 >= (sma50 * 0.975))) : true
 
-highest_high_imp = ta.highest(high, impulse_lookback)
-impulse_passed   = not enable_impulse_gate or (highest_high_imp >= ema21 * (1.0 + impulse_peak_pct))
-retracement_ok   = not enable_impulse_gate or ((highest_high_imp - low) / highest_high_imp >= min_pullback_pct or (close < close[1] and close[1] < close[2]))
-gate2_ok         = impulse_passed and retracement_ok
+// Moving Average Proximity Gate: Current price MUST hover near EMA21 or SMA50 within tolerance (default 2.5%)
+dist_ema21 = math.abs(close - ema21) / ema21
+dist_sma50 = math.abs(close - sma50) / sma50
+near_ma    = (dist_ema21 <= touch_threshold_pct) or (dist_sma50 <= touch_threshold_pct)
 
-dist_ema21  = math.abs(close - ema21) / ema21
-dist_sma50  = math.abs(close - sma50) / sma50
-near_ma     = (dist_ema21 <= touch_threshold_pct) or (dist_sma50 <= touch_threshold_pct)
-is_pullback = ta.highest(high, 4)[1] > high
+// Gate 2: Preceding Minervini Stage-2 Impulse Wave & Orderly Retracement Sequence
+highest_high_imp = ta.highest(high, impulse_lookback)[1]
+impulse_passed   = not enable_impulse_gate or (highest_high_imp >= ema21 * (1.0 + impulse_peak_pct))
+
+// Genuine Prior Pullback & Downtrend Verification (strictly matching Python check_pullback)
+has_declined       = (highest_high_imp - low) / highest_high_imp >= min_pullback_pct
+consec_lower       = (close[1] < close[2] and close[2] < close[3]) or (close[1] < open[1] and close[2] < open[2])
+has_prior_pullback = (has_declined or consec_lower) and (ta.highest(high, 4)[1] > math.max(open, close))
+
+// Gate 2 is ONLY passed when impulse wave, prior pullback, AND moving average proximity are ALL satisfied!
+gate2_ok = impulse_passed and has_prior_pullback and near_ma
 
 is_shooting_star = enable_shooting_star and candle_range > 0 and (upper_shadow / candle_range >= max_upper_wick_ratio or upper_shadow >= 2.0 * real_body)
 prev_close       = close[1]
@@ -337,7 +345,7 @@ if touch_sma200_bar and barstate.isconfirmed
     if enable_touch_boxes and touch_sma200_cnt <= max_touch_boxes
         box.new(left=bar_index - 1, top=math.min(high, sma200 * 1.008), right=bar_index, bottom=math.max(low, sma200 * 0.992), bgcolor=color.new(#e040fb, 75), border_color=#e040fb, text="TCH", text_size=size.tiny, text_color=color.black)
 
-is_touch = (touch_ema21_bar or touch_sma50_bar) and near_ma
+is_touch = (touch_ema21_bar or touch_sma50_bar) and near_ma and is_green and (close > close[1])
 
 // ------------------------------------------------------------------------------------------------
 // 7. INSTITUTIONAL CONVICTION SCORING ENGINE (0.0 to 7.0+)
@@ -378,7 +386,9 @@ var int rej_cnt_stall    = 0
 var int rej_cnt_trades   = 0
 
 // Candidate Signal Evaluation
-candidate_signal = structure_ok and gate2_ok and is_pullback and (pattern_hit or is_touch) and weekly_ok and is_mature
+// Strictly requires green session (Gate 6.5), trend structure, Gate 2 (Impulse + Pullback + Near MA), pattern/touch, weekly MTF, and maturity
+is_green_session = is_green and (prev_close > 0 ? close > prev_close : true)
+candidate_signal = is_green_session and structure_ok and gate2_ok and (pattern_hit or is_touch) and weekly_ok and is_mature
 
 var bool is_valid_signal = false
 var string rej_reason = ""
@@ -651,20 +661,22 @@ if in_position and show_target_lines and barstate.islast
     lbl_target_4 := label.new(bar_index + 1, p_t4, "T4* $" + str.tostring(p_t4, "#.##"), color=color.new(#fff59d, 20), textcolor=color.black, style=label.style_label_left, size=size.tiny)
 
 // Volume Surge "V" Marker with Interactive Tooltip
-vol_surge = volume > (vol_sma21 * vol_v_threshold_pct) or (volume[1] > 0 and volume > (volume[1] * 1.3))
-if show_volume_v_marker and vol_surge and not buy_action and not runner_add_signal and not (candidate_signal and is_valid_signal and in_position)
+pct_vs_prev = volume[1] > 0 ? ((volume - volume[1]) / volume[1] * 100.0) : 0.0
+pct_vs_avg  = vol_sma21 > 0 ? ((volume - vol_sma21) / vol_sma21 * 100.0) : 0.0
+vol_v_triggered = (pct_vs_prev >= vol_v_prev_day_pct) and (math.abs(pct_vs_avg) >= vol_v_21d_pct)
+
+if show_volume_v_marker and vol_v_triggered and not buy_action and not runner_add_signal and not (candidate_signal and is_valid_signal and in_position)
     vol_m = volume / 1000000.0
     vol_k = volume / 1000.0
     vol_str = volume >= 1000000 ? str.tostring(vol_m, "#.##") + "M" : str.tostring(vol_k, "#.#") + "K"
-    pct_vs_avg = vol_sma21 > 0 ? ((volume - vol_sma21) / vol_sma21 * 100.0) : 0.0
-    pct_vs_prev = volume[1] > 0 ? ((volume - volume[1]) / volume[1] * 100.0) : 0.0
     
-    vol_tip = "📊 INSTITUTIONAL VOLUME EXPANSION:\n" +
+    vol_tip = "📊 INSTITUTIONAL VOLUME ANOMALY:\n" +
               "- Current Volume: " + vol_str + " shares\n" +
-              "- vs 21-Day Avg: " + (pct_vs_avg >= 0 ? "+" : "") + str.tostring(pct_vs_avg, "#.#") + "%\n" +
-              "- vs Previous Day: " + (pct_vs_prev >= 0 ? "+" : "") + str.tostring(pct_vs_prev, "#.#") + "%"
+              "- vs Previous Day: " + (pct_vs_prev >= 0 ? "+" : "") + str.tostring(pct_vs_prev, "#.#") + "% (Req: >=" + str.tostring(vol_v_prev_day_pct, "#.#") + "%)\n" +
+              "- vs 21-Day Avg: " + (pct_vs_avg >= 0 ? "+" : "") + str.tostring(pct_vs_avg, "#.#") + "% (Req: |diff| >=" + str.tostring(vol_v_21d_pct, "#.#") + "%)\n" +
+              "- Status: " + (pct_vs_avg >= 0 ? "Surge Expansion" : "Dry-up Contraction")
               
-    v_col = volume > (vol_sma21 * 2.0) ? color.new(#00e5ff, 20) : is_green ? color.new(#00e676, 20) : color.new(#ff5252, 20)
+    v_col = pct_vs_avg >= 0 ? (volume > (vol_sma21 * 2.0) ? color.new(#00e5ff, 20) : color.new(#00e676, 20)) : color.new(#ffd700, 20)
     label.new(bar_index, low, "V", color=v_col, textcolor=color.black, style=label.style_label_up, size=size.tiny, tooltip=vol_tip)
 
 // ------------------------------------------------------------------------------------------------

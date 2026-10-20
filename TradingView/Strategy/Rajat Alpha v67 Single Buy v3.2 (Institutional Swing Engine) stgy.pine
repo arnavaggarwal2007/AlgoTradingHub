@@ -503,15 +503,9 @@ if show_volume_v_marker and vol_v_triggered and not buy_action and not runner_ad
     v_col = pct_vs_avg >= 0 ? (volume > (vol_sma21 * 2.0) ? color.new(#00e5ff, 20) : color.new(#00e676, 20)) : color.new(#ffd700, 20)
     label.new(bar_index, low, "V", color=v_col, textcolor=color.black, style=label.style_label_up, size=size.tiny, tooltip=vol_tip)
 
-// Three dedicated vertical tracks at the bottom of the chart (Clean stacking without overlap):
-// Line 1 (Upper Track): Weekly Multi-Timeframe Trend (▲ Green when close > EMA21, ▲ Red when below)
-plotchar(show_weekly_ribbon, title="Line 1: Weekly Trend (▲)", char="", text="▲", location=location.bottom, color=weekly_ok ? color.lime : color.red, size=size.tiny)
-
-// Line 2 (Middle Track): Monthly Multi-Timeframe Trend (▼ Teal when close > EMA10, ▼ Maroon when below)
-plotchar(show_monthly_ribbon, title="Line 2: Monthly Trend (▼)", char="", text="\n▼", location=location.bottom, color=monthly_ok ? color.teal : color.maroon, size=size.tiny)
-
-// Line 3 (Lower Baseline): Volume Conviction (◆ Orange on buy/touch surge, Blue on green expansion, Fuchsia on red expansion, Gray when normal)
-plotchar(show_volume_ribbon, title="Line 3: Volume Conviction (◆)", char="", text="\n\n◆", location=location.bottom, color=vol_conv ? color.orange : vol_high ? (is_green ? color.blue : color.fuchsia) : color.new(color.gray, 85), size=size.tiny)
+plotshape(show_weekly_ribbon, title="Weekly Trend (Triangle Up)", location=location.bottom, color=weekly_ok ? color.lime : color.red, style=shape.triangleup, size=size.tiny)
+plotshape(show_monthly_ribbon, title="Monthly Trend (Triangle Down)", location=location.bottom, color=monthly_ok ? color.teal : color.maroon, style=shape.triangledown, size=size.tiny)
+plotshape(show_volume_ribbon, title="Volume Conviction (Diamond)", location=location.bottom, color=vol_conv ? color.orange : vol_high ? (is_green ? color.blue : color.fuchsia) : color.new(color.gray, 85), style=shape.diamond, size=size.tiny)
 
 // ------------------------------------------------------------------------------------------------
 // 10. INSTITUTIONAL HUD DASHBOARD (Top-Right Live Table)

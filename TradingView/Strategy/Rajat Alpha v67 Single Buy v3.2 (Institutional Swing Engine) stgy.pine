@@ -128,8 +128,13 @@ enable_touch_boxes      = input.bool(true, "Show Visual Touch Boxes on MAs", gro
 max_touch_boxes         = input.int(4, "Max Touches to Display (Capped at 4)", minval=1, maxval=4, group=grp_touch)
 touch_threshold_pct     = input.float(0.025, "Touch Proximity Range % (2.5%)", minval=0.005, maxval=0.05, step=0.005, group=grp_touch)
 
+// --- Group: Execution Cadence Limits ---
+grp_limits = "8. Execution Cadence & Capacity"
+enable_max_trades       = input.bool(true, "Enable Daily Trade Limit", group=grp_limits)
+max_trades_per_day      = input.int(3, "Max Daily Trades Allowed", minval=1, maxval=10, group=grp_limits)
+
 // --- Group: Visual Displays & HUD Dashboards ---
-grp_vis = "8. Visual Displays & HUD Dashboards"
+grp_vis = "9. Visual Displays & HUD Dashboards"
 show_ma_lines           = input.bool(true, "Show Moving Average Lines (EMA21, SMA50, SMA200)", group=grp_vis)
 show_custom_ma          = input.bool(true, "Show Custom Moving Average (SMA/EMA)", group=grp_vis)
 custom_ma_type          = input.string("SMA", "Custom MA Type", options=["SMA", "EMA"], group=grp_vis)
@@ -348,11 +353,18 @@ else if touch_sma50_bar
 if use_ibd_score_bonus and ibd_rs_rating >= ibd_bonus_threshold
     score += ibd_bonus_points
 
+// Daily Execution Cadence Tracker
+var int trades_executed_today = 0
+if ta.change(time("D")) != 0
+    trades_executed_today := 0
+
+max_trades_reached = enable_max_trades and (trades_executed_today >= max_trades_per_day)
+
 // Candidate Signal Evaluation
 // Strictly requires green session (Gate 6.5), trend structure, Gate 2 (Impulse + Pullback + Near MA), pattern/touch, weekly MTF, and maturity
 is_green_session = is_green and (prev_close > 0 ? close > prev_close : true)
 candidate_signal = is_green_session and structure_ok and gate2_ok and (pattern_hit or is_touch) and weekly_ok and is_mature
-is_valid_signal  = candidate_signal and market_regime_ok and not is_shooting_star and not is_extended and not is_stalling and (score >= min_score_req)
+is_valid_signal  = candidate_signal and market_regime_ok and not is_shooting_star and not is_extended and not is_stalling and not max_trades_reached and (score >= min_score_req)
 
 // ------------------------------------------------------------------------------------------------
 // 8. STRATEGY POSITION STATE MACHINE & EXECUTION ENGINE
@@ -372,6 +384,7 @@ if buy_action and barstate.isconfirmed
     pos_bar       := bar_index
     pos_stage     := 0
     pos_ext_count := 0
+    trades_executed_today += 1
     
     atr_dist = use_atr_sl ? (atr_multiplier * atr14) : (pos_entry * fixed_sl_fallback_pct)
     atr_dist := math.max(pos_entry * min_sl_pct, math.min(pos_entry * max_sl_pct, atr_dist))
@@ -490,9 +503,9 @@ if show_volume_v_marker and vol_v_triggered and not buy_action and not runner_ad
     v_col = pct_vs_avg >= 0 ? (volume > (vol_sma21 * 2.0) ? color.new(#00e5ff, 20) : color.new(#00e676, 20)) : color.new(#ffd700, 20)
     label.new(bar_index, low, "V", color=v_col, textcolor=color.black, style=label.style_label_up, size=size.tiny, tooltip=vol_tip)
 
-plotshape(show_weekly_ribbon, title="Weekly Trend (Triangle Up)", location=location.bottom, color=weekly_ok ? color.lime : color.red, style=shape.triangleup, size=size.tiny)
-plotshape(show_monthly_ribbon, title="Monthly Trend (Triangle Down)", location=location.bottom, color=monthly_ok ? color.teal : color.maroon, style=shape.triangledown, size=size.tiny)
-plotshape(show_volume_ribbon, title="Volume Conviction (Diamond)", location=location.bottom, color=vol_conv ? color.orange : vol_high ? (is_green ? color.blue : color.fuchsia) : color.new(color.gray, 85), style=shape.diamond, size=size.tiny)
+plotshape(show_weekly_ribbon, title="Line 1: Weekly Trend (Triangle Up)", location=location.bottom, color=weekly_ok ? color.lime : color.red, style=shape.triangleup, size=size.tiny, text="\n\n")
+plotshape(show_monthly_ribbon, title="Line 2: Monthly Trend (Triangle Down)", location=location.bottom, color=monthly_ok ? color.teal : color.maroon, style=shape.triangledown, size=size.tiny, text="\n")
+plotshape(show_volume_ribbon, title="Line 3: Volume Conviction (Diamond)", location=location.bottom, color=vol_conv ? color.orange : vol_high ? (is_green ? color.blue : color.fuchsia) : color.new(color.gray, 85), style=shape.diamond, size=size.tiny)
 
 // ------------------------------------------------------------------------------------------------
 // 10. INSTITUTIONAL HUD DASHBOARD (Top-Right Live Table)

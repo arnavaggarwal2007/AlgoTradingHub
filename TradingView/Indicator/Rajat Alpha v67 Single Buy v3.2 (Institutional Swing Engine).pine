@@ -690,9 +690,15 @@ else if vol_conv and is_green
 else if vol_high and not is_green
     diamond_color := color.fuchsia
 
-plotshape(show_weekly_ribbon, title="Line 1: Weekly Trend (Triangle Up)", location=location.bottom, color=weekly_ok ? color.lime : color.red, style=shape.triangleup, size=size.tiny, text="\n\n")
-plotshape(show_monthly_ribbon, title="Line 2: Monthly Trend (Triangle Down)", location=location.bottom, color=monthly_ok ? color.teal : color.maroon, style=shape.triangledown, size=size.tiny, text="\n")
-plotshape(show_volume_ribbon, title="Line 3: Volume Conviction (Diamond)", location=location.bottom, color=diamond_color, style=shape.diamond, size=size.tiny)
+// Three dedicated vertical tracks at the bottom of the chart (Clean stacking without overlap):
+// Line 1 (Upper Track): Weekly Multi-Timeframe Trend (▲ Green when close > EMA21, ▲ Red when below)
+plotchar(show_weekly_ribbon, title="Line 1: Weekly Trend (▲)", char="", text="▲", location=location.bottom, color=weekly_ok ? color.lime : color.red, size=size.tiny)
+
+// Line 2 (Middle Track): Monthly Multi-Timeframe Trend (▼ Teal when close > EMA10, ▼ Maroon when below)
+plotchar(show_monthly_ribbon, title="Line 2: Monthly Trend (▼)", char="", text="\n▼", location=location.bottom, color=monthly_ok ? color.teal : color.maroon, size=size.tiny)
+
+// Line 3 (Lower Baseline): Volume Conviction (◆ Orange on buy/touch surge, Blue on green expansion, Fuchsia on red expansion, Gray when normal)
+plotchar(show_volume_ribbon, title="Line 3: Volume Conviction (◆)", char="", text="\n\n◆", location=location.bottom, color=diamond_color, size=size.tiny)
 
 // ------------------------------------------------------------------------------------------------
 // 12. INSTITUTIONAL HUD DASHBOARD (Top-Right Live Table)

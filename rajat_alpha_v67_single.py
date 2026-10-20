@@ -111,14 +111,14 @@ console_formatter = logging.Formatter(
 console_handler.setFormatter(console_formatter)
 logger.addHandler(console_handler)
 
-file_handler = logging.FileHandler('logs/rajat_alpha_v67.log')
+file_handler = logging.FileHandler('logs/rajat_alpha_v67.log', encoding='utf-8')
 json_formatter = ComplianceJSONFormatter(
     '%(timestamp)s %(level)s %(logger)s %(module)s %(function)s %(line)s %(message)s'
 )
 file_handler.setFormatter(json_formatter)
 logger.addHandler(file_handler)
 
-audit_handler = logging.FileHandler('logs/audit.log')
+audit_handler = logging.FileHandler('logs/audit.log', encoding='utf-8')
 audit_handler.setLevel(logging.WARNING)
 audit_handler.setFormatter(json_formatter)
 logger.addHandler(audit_handler)
@@ -161,6 +161,9 @@ class PositionDatabase:
     
     def __init__(self, db_path='db/positions.db'):
         self.db_path = db_path
+        db_dir = os.path.dirname(db_path)
+        if db_dir:
+            os.makedirs(db_dir, exist_ok=True)
         self.conn = sqlite3.connect(db_path, check_same_thread=False)
         self.create_tables()
     
@@ -530,9 +533,10 @@ class MarketDataFetcher:
         logic = {'open': 'first', 'high': 'max', 'low': 'min', 'close': 'last', 'volume': 'sum'}
         return df_daily.resample('ME').agg(logic)
     
-    @with_api_retry(max_retries=3, base_delay=0.5)
+    @with_api_retry(max_retries=3, base_delay=1.0)
     def get_current_price(self, symbol: str) -> Optional[float]:
-        """Get latest price with fallback to last valid price"""
+        """Get latest price with retry, quote fallback, and cached price fallback"""
+        # 1. Attempt latest trade bar
         try:
             params = StockLatestBarRequest(symbol_or_symbols=symbol)
             bars = self.data_client.get_stock_latest_bar(params)
@@ -541,11 +545,27 @@ class MarketDataFetcher:
                 self.last_valid_price[symbol] = price
                 return price
         except Exception as e:
-            logger.warning(f"[{symbol}] Failed to fetch latest bar: {e}")
+            logger.warning(f"[{symbol}] Direct bar query encounter: {e}. Attempting midpoint quote fallback...")
+            # Fallback to quote
+            quote = self.get_latest_quote(symbol)
+            if quote and quote.get('mid'):
+                mid = float(quote['mid'])
+                self.last_valid_price[symbol] = mid
+                return mid
+            if symbol in self.last_valid_price:
+                return self.last_valid_price[symbol]
+            raise e
         
+        # 2. Try quote fallback if bar was empty/None
+        quote = self.get_latest_quote(symbol)
+        if quote and quote.get('mid'):
+            mid = float(quote['mid'])
+            self.last_valid_price[symbol] = mid
+            return mid
+            
         return self.last_valid_price.get(symbol)
 
-    @with_api_retry(max_retries=3, base_delay=0.5)
+    @with_api_retry(max_retries=3, base_delay=1.0)
     def get_latest_quote(self, symbol: str) -> Optional[Dict]:
         """Fetch current bid, ask, and midpoint quote for Smart Order Execution Engine"""
         try:
@@ -1077,6 +1097,7 @@ class RajatAlphaAnalyzer:
         # GATE 0: Broad Market Regime Gate
         if not self.check_market_regime():
             result['reason'] = "Broad market regime not bullish (SPY/QQQ < 50 SMA)"
+            logger.info(f"[{symbol}] ❌ Gate 0 Market Regime: FAILED (SPY/QQQ < SMA50)")
             return False, result
 
         # GATE 1: Market Structure
@@ -1084,11 +1105,13 @@ class RajatAlphaAnalyzer:
         result['checks']['market_structure'] = structure_ok
         if not structure_ok:
             result['reason'] = "Market structure failed (50 SMA > 200 SMA required)"
+            logger.info(f"[{symbol}] ❌ Gate 1 Market Structure: FAILED (SMA50 <= SMA200)")
             return False, result
 
         # GATE 1.5: Regime-Adaptive MA Slope
         if not self.check_ma_slopes(symbol, df_daily):
             result['reason'] = "50 SMA slope negative in non-bull regime"
+            logger.info(f"[{symbol}] ❌ Gate 1.5 MA Slope: FAILED (SMA50 downward slope)")
             return False, result
 
         # GATE 2: Preceding Impulse & Orderly Retracement (First criteria: valid pullback)
@@ -1096,6 +1119,7 @@ class RajatAlphaAnalyzer:
         result['checks']['pullback'] = pullback_ok
         if not pullback_ok:
             result['reason'] = "No valid preceding impulse and pullback sequence"
+            logger.info(f"[{symbol}] ❌ Gate 2 Pullback: FAILED (No valid impulse + pullback near MAs)")
             return False, result
 
         # GATE 3: Candlestick Pattern OR Qualified Touch (Pattern formation after pullback)
@@ -1105,6 +1129,7 @@ class RajatAlphaAnalyzer:
         
         if not (pat_found or touch_found):
             result['reason'] = "No recognized reversal pattern or qualified touch after pullback"
+            logger.info(f"[{symbol}] ❌ Gate 3 Setup Pattern/Touch: FAILED (No qualifying pattern or touch)")
             return False, result
 
         result['checks']['pattern'] = pat_found
@@ -1117,6 +1142,7 @@ class RajatAlphaAnalyzer:
         result['checks']['monthly_ok'] = monthly_ok
         if not weekly_ok:
             result['reason'] = "Weekly MTF failed (Weekly Close <= Weekly EMA21)"
+            logger.info(f"[{symbol}] ❌ Gate 4 Weekly MTF: FAILED (Weekly Close <= Weekly EMA21)")
             return False, result
 
         # GATE 5: Demand Zone Proximity Check
@@ -1128,24 +1154,26 @@ class RajatAlphaAnalyzer:
         # GATE 6: Stalling Filter
         if self.check_stalling(df_daily):
             result['reason'] = "Stock is in horizontal sideways consolidation"
+            logger.info(f"[{symbol}] ❌ Gate 6 Stalling: FAILED (Horizontal consolidation detected)")
             return False, result
 
         # GATE 6.25: Extended Stock Filter (Gap > 4%)
         curr_price = self.data_fetcher.get_current_price(symbol)
         if curr_price is None:
-            result['reason'] = "Unable to fetch live price"
-            return False, result
+            curr_price = float(df_daily.iloc[-1]['close'])
             
         if self.config.get('strategy_params', 'enable_extended_filter', True):
             is_ext, gap_pct = self.check_extended_stock(df_daily, curr_price)
             if is_ext:
                 result['reason'] = f"Stock is EXTENDED (Gap up {gap_pct*100:.2f}%)"
+                logger.info(f"[{symbol}] ❌ Gate 6.25 Extended: FAILED (Gap up {gap_pct*100:.2f}%)")
                 return False, result
 
         # GATE 6.5: Green Session Confirmation
         prev_close = df_daily.iloc[-2]['close']
         if curr_price <= prev_close:
             result['reason'] = f"Stock is RED today (${curr_price:.2f} <= ${prev_close:.2f})"
+            logger.info(f"[{symbol}] ❌ Gate 6.5 Green Candle: FAILED (RED today: ${curr_price:.2f} <= ${prev_close:.2f})")
             return False, result
 
         # GATE 6.75: Shooting Star Rejection Filter (MANDATORY)
@@ -1153,19 +1181,19 @@ class RajatAlphaAnalyzer:
         max_w2b = self.config.get('candle_quality', 'max_wick_to_body_ratio', 2.0)
         if PatternDetector.is_shooting_star(curr_candle, max_wick, max_w2b):
             result['reason'] = "Shooting star rejection: Upper wick indicates heavy seller distribution"
-            logger.info(f"[{symbol}] ❌ SHOOTING STAR REJECTED: Upper shadow spans >50% of range.")
+            logger.info(f"[{symbol}] ❌ Gate 6.75 Shooting Star: FAILED (Upper shadow spans >50% of range)")
             return False, result
 
         # Compute IBD Relative Strength Composite (0-100) — Informational & Tie-Breaker
         rs_score = self.calculate_rs_composite(symbol, df_daily)
         result['rs_score'] = rs_score
-        logger.info(f"[{symbol}] ℹ️ IBD RS Rating: {rs_score:.1f}/100 (Informational)")
 
         # Optional Hard RS cutoff if explicitly configured
         if self.config.get('relative_strength', 'enable', False):
             min_rs = self.config.get('relative_strength', 'min_rs_rating', 40.0)
             if rs_score < min_rs:
                 result['reason'] = f"Relative Strength rating too low: {rs_score:.1f} < {min_rs}"
+                logger.info(f"[{symbol}] ❌ RS Rating Filter: FAILED ({rs_score:.1f} < {min_rs})")
                 return False, result
 
         # GATE 7: Scoring & Touch-Only Dual Gate
@@ -1177,6 +1205,7 @@ class RajatAlphaAnalyzer:
             min_touch_score = self.config.get('trading_rules', 'min_touch_only_score', 5.0)
             if score < min_touch_score:
                 result['reason'] = f"Touch-only score {score:.1f} below required {min_touch_score}"
+                logger.info(f"[{symbol}] ❌ Gate 7 Touch Score: FAILED ({score:.1f} < {min_touch_score})")
                 return False, result
                 
             body_size = abs(curr_candle['close'] - curr_candle['open'])
@@ -1186,11 +1215,13 @@ class RajatAlphaAnalyzer:
             
             if body_ratio < 0.50 or close_pos < 0.67:
                 result['reason'] = "Touch-only candle failed bullish conviction confirmation"
+                logger.info(f"[{symbol}] ❌ Gate 7 Touch Conviction: FAILED (Weak candle body or close position)")
                 return False, result
 
         min_score = self.config.get('strategy_params', 'min_signal_score', 4.0)
         if score < min_score:
             result['reason'] = f"Score {score:.1f} below minimum {min_score}"
+            logger.info(f"[{symbol}] ❌ Gate 7 Minimum Score: FAILED (Score {score:.1f} < {min_score})")
             return False, result
 
         # Valid Signal
@@ -1434,9 +1465,12 @@ class PositionManager:
                 target_sl = entry_price - (risk_d * 0.25)
                 new_stage = 1
 
-        if target_sl > current_sl:
+        if target_sl > (current_sl + 0.005):
             self.db.update_stop_loss_stepper(position_id, round(target_sl, 4), round(highest_price, 4), new_stage)
-            logger.info(f"[{position['symbol']}] Trailing SL stepped: ${current_sl:.2f} → ${target_sl:.2f} (Profit: {profit_pct*100:+.2f}%, Stage {new_stage})")
+            position['stop_loss'] = round(target_sl, 4)
+            position['sl_stage'] = new_stage
+            position['highest_price_seen'] = round(highest_price, 4)
+            logger.info(f"[{position['symbol']}] Trailing SL stepped: ${current_sl:.2f} -> ${target_sl:.2f} (Profit: {profit_pct*100:+.2f}%, Stage {new_stage})")
 
     def check_stop_loss(self, position: Dict, current_price: float, 
                         is_closing_window: bool = False, 
@@ -1625,6 +1659,14 @@ class SignalQueue:
         elapsed = (datetime.now() - self.window_start_time).total_seconds() / 60
         return elapsed >= self.monitoring_minutes
     
+    def get_queue_status(self) -> Dict:
+        elapsed = (datetime.now() - self.window_start_time).total_seconds() / 60 if self.window_start_time else 0.0
+        return {
+            'signals_queued': len(self.signals),
+            'minutes_elapsed': elapsed,
+            'symbols': list(self.signals.keys())
+        }
+    
     def get_top_signals(self, analyzer: RajatAlphaAnalyzer) -> List[Tuple[str, Dict]]:
         valid_signals = []
         for symbol, details in self.signals.items():
@@ -1689,13 +1731,20 @@ class RajatAlphaTradingBot:
         return (now.hour == 9 and now.minute >= 30) or (now.hour == 10 and now.minute < 30)
 
     def is_market_opening_down(self) -> bool:
-        """Check if SPY opened below yesterday's close"""
-        df_spy = self.data_fetcher.get_daily_bars('SPY', days=5)
-        if df_spy is not None and len(df_spy) >= 2:
-            prev_close = df_spy['close'].iloc[-2]
-            curr_price = self.data_fetcher.get_current_price('SPY')
-            if curr_price and curr_price < prev_close:
-                return True
+        """Check if SPY opened below yesterday's close with robust multi-layer fallback"""
+        try:
+            df_spy = self.data_fetcher.get_daily_bars('SPY', days=5)
+            if df_spy is not None and len(df_spy) >= 2:
+                prev_close = float(df_spy['close'].iloc[-2])
+                curr_price = self.data_fetcher.get_current_price('SPY')
+                if curr_price is None:
+                    # Fallback to the latest available close in df_spy
+                    curr_price = float(df_spy['close'].iloc[-1])
+                is_down = curr_price < prev_close
+                logger.info(f"[FIRST-HOUR GUARD] SPY Price: ${curr_price:.2f} vs Prev Close: ${prev_close:.2f} -> Market Open Down: {is_down}")
+                return is_down
+        except Exception as e:
+            logger.warning(f"[FIRST-HOUR GUARD] Failed to evaluate SPY open direction: {e}. Defaulting to False (Normal stops).")
         return False
 
     def is_buy_window(self) -> bool:
@@ -1810,24 +1859,48 @@ class RajatAlphaTradingBot:
     def run_sell_guardian(self):
         """Monitors open positions for stop-loss, profit-taking, and structural TES"""
         open_positions = self.db.get_open_positions()
-        if not open_positions: return
+        et_now = datetime.now(pytz.timezone('US/Eastern')).strftime('%H:%M:%S ET')
+        
+        logger.info("=" * 80)
+        logger.info(f"🛡️ SELL GUARDIAN: Portfolio Health & Position Monitor ({len(open_positions)} Open Positions | {et_now})")
+        logger.info("=" * 80)
+        
+        if not open_positions:
+            logger.info("No open positions to monitor.")
+            return
         
         is_first_hour = self.is_first_hour()
         market_down = self.is_market_opening_down() if is_first_hour else False
         suppress_first_hour = is_first_hour and market_down and self.config.get('first_hour_guard', 'suppress_sl', True)
         is_closing = self.is_closing_window()
         
+        if is_first_hour:
+            guard_status = "⚠️ ENGAGED (Regular Stops Suppressed)" if suppress_first_hour else "✅ NORMAL (Index Up / Catastrophic Active)"
+            logger.info(f"[FIRST-HOUR GUARD] 09:30-10:30 ET Status: {guard_status}")
+            
         for position in open_positions:
             symbol = position['symbol']
             curr_price = self.data_fetcher.get_current_price(symbol)
-            if curr_price is None: continue
+            if curr_price is None:
+                logger.warning(f"[{symbol}] Could not fetch current price, skipping cycle check.")
+                continue
+            
+            profit_pct = (curr_price - position['entry_price']) / position['entry_price'] * 100.0
+            stage_str = f"Stage {position.get('sl_stage', 0)}" + (" [RUNNER]" if position.get('is_runner') else "")
+            peak_price = position.get('highest_price_seen') or curr_price
+            
+            logger.info(
+                f"[{symbol}] Price: ${curr_price:.2f} (Entry: ${position['entry_price']:.2f}) | "
+                f"P/L: {profit_pct:+.2f}% | SL: ${position['stop_loss']:.2f} ({stage_str}) | "
+                f"Qty: {position['remaining_qty']} | Peak: ${peak_price:.2f}"
+            )
             
             # 1. Update Trailing Stop Stepper
             self.position_manager.update_trailing_stop_loss(position, current_price=curr_price)
             
             # 2. Check Stop Loss (Respects Closing-Basis & First-Hour Guard)
             if self.position_manager.check_stop_loss(position, curr_price, is_closing_window=is_closing, is_first_hour_suppressed=suppress_first_hour):
-                logger.warning(f"[{symbol}] STOP LOSS TRIGGERED at ${curr_price:.2f}")
+                logger.warning(f"[{symbol}] 🚨 STOP LOSS TRIGGERED at ${curr_price:.2f}")
                 self.position_manager.execute_full_exit(position, curr_price, "Stop Loss")
                 continue
                 
@@ -1839,16 +1912,26 @@ class RajatAlphaTradingBot:
             # 4. Check Dynamic Structural TES
             df_sym = self.data_fetcher.get_daily_bars(symbol, days=40)
             if not suppress_first_hour and self.position_manager.check_time_exit(position, df_sym):
-                logger.warning(f"[{symbol}] TIME EXIT SIGNAL (TES) triggered")
+                logger.warning(f"[{symbol}] ⏰ TIME EXIT SIGNAL (TES) triggered")
                 self.position_manager.execute_full_exit(position, curr_price, "TES")
                 continue
 
     def run_buy_hunter(self):
         """Scans watchlist during buy window and manages signal queue"""
-        if not self.is_buy_window(): return
+        now_et = datetime.now(pytz.timezone('US/Eastern'))
+        start_str = self.config.get('execution_schedule', 'buy_window_start_time', '14:30')
+        end_str = self.config.get('execution_schedule', 'buy_window_end_time', '15:59')
+        
+        if not self.is_buy_window():
+            logger.info(f"⏳ BUY HUNTER: Outside Buy Window ({start_str} - {end_str} ET | Current: {now_et.strftime('%H:%M:%S ET')})")
+            return
         
         is_closing = self.is_closing_window()
         if self.signal_queue.is_window_complete(force_cutoff=is_closing):
+            logger.info("=" * 80)
+            logger.info("🎯 BUY HUNTER: 30-Minute Monitoring Window Complete - Executing Ranked Signals")
+            logger.info("=" * 80)
+            
             top_signals = self.signal_queue.get_top_signals(self.analyzer)
             open_positions = self.db.get_open_positions()
             max_positions = self.config.get('trading_rules', 'max_open_positions', 15)
@@ -1860,8 +1943,6 @@ class RajatAlphaTradingBot:
             daily_remaining = max(0, max_trades_per_day - trades_today)
             avail = min(pos_avail, daily_remaining)
             
-            logger.info("=" * 80)
-            logger.info("🎯 BUY HUNTER EVALUATION & PORTFOLIO ALLOCATION")
             logger.info(f"Daily Trades Executed: {trades_today}/{max_trades_per_day} | Open Positions: {len(open_positions)}/{max_positions} | Available Slots: {avail}")
             
             if top_signals:
@@ -1872,7 +1953,6 @@ class RajatAlphaTradingBot:
                     logger.info(f"  {idx}. [{sym}] Score: {det.get('score')}/7.0 | IBD RS: {det.get('rs_score'):.1f} | Pattern: {det.get('pattern')} | Price: ${det.get('price'):.2f} -> {status_tag}")
             else:
                 logger.info("No candidates maintained qualified status upon 30-min revalidation.")
-            logger.info("=" * 80)
             
             for symbol, details in top_signals[:avail]:
                 if self.config.get('trading_rules', 'prevent_same_day_reentry', True) and self.db.was_traded_today(symbol):
@@ -1887,15 +1967,50 @@ class RajatAlphaTradingBot:
             
         # Collection Phase
         watchlist_file = self.config.get('trading_rules', 'watchlist_file', 'config/watchlist.txt')
-        if not os.path.exists(watchlist_file): return
+        if not os.path.exists(watchlist_file):
+            logger.warning(f"Watchlist file not found: {watchlist_file}")
+            return
+            
         with open(watchlist_file, 'r') as f:
             symbols = [line.strip().upper() for line in f if line.strip()]
             
+        # Check capacity before scanning
+        trades_today = self.db.count_trades_today()
+        max_trades_per_day = self.config.get('trading_rules', 'max_trades_per_day', 3)
+        open_positions = self.db.get_open_positions()
+        max_positions = self.config.get('trading_rules', 'max_open_positions', 15)
+        
+        q_stat = self.signal_queue.get_queue_status()
+        logger.info("=" * 80)
+        logger.info(f"🎯 BUY HUNTER: Watchlist Scan & Candidate Staging ({len(symbols)} Watchlist Symbols)")
+        logger.info(f"Portfolio Slots: {len(open_positions)}/{max_positions} | Trades Today: {trades_today}/{max_trades_per_day} | Queue: {q_stat['signals_queued']} staged ({q_stat['minutes_elapsed']:.1f}m/{self.signal_queue.monitoring_minutes}m)")
+        logger.info("=" * 80)
+        
+        if trades_today >= max_trades_per_day:
+            logger.info(f"Daily trade limit reached ({trades_today}/{max_trades_per_day}), skipping candidate collection.")
+            return
+            
+        if len(open_positions) >= max_positions:
+            logger.info(f"Maximum open positions reached ({len(open_positions)}/{max_positions}), skipping candidate collection.")
+            return
+            
+        new_staged = 0
         for symbol in symbols:
+            # Check per-stock limit
+            existing = self.db.get_open_positions(symbol=symbol)
+            max_per_stock = self.config.get('trading_rules', 'max_trades_per_stock', 1)
+            if len(existing) >= max_per_stock:
+                logger.info(f"[{symbol}] ℹ️ Already holding maximum open position ({len(existing)}/{max_per_stock}), skipping scan.")
+                continue
+                
             valid, details = self.analyzer.analyze_entry_signal(symbol)
+            self.db.log_signal(symbol, details, executed=False)
             if valid:
                 self.signal_queue.add_signal(symbol, details)
-                logger.info(f"[{symbol}] 📥 Staged in Buy Queue: Score {details.get('score')}/7.0 | IBD RS: {details.get('rs_score'):.1f} | Pattern: {details.get('pattern')}")
+                new_staged += 1
+                logger.info(f"[{symbol}] 📥 STAGED IN BUY QUEUE: Score {details.get('score')}/7.0 | IBD RS: {details.get('rs_score'):.1f} | Pattern: {details.get('pattern')} | Price: ${details.get('price'):.2f}")
+                
+        logger.info(f"Buy Hunter scan complete: {new_staged} new candidates staged. Total queue: {len(self.signal_queue.signals)} candidates (re-validates in {self.signal_queue.monitoring_minutes} min).")
 
     def run(self):
         """Master execution loop"""
@@ -1907,6 +2022,7 @@ class RajatAlphaTradingBot:
                     self.run_sell_guardian()
                     self.run_buy_hunter()
                     interval = 60 if self.is_buy_window() else 120
+                    logger.info(f"--- Cycle complete. Next portfolio monitor scan in {interval}s ---")
                     time.sleep(interval)
                 else:
                     logger.info("Market closed. Sleeping 5 minutes...")

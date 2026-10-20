@@ -144,9 +144,9 @@ show_zones              = input.bool(true, "Show Demand (DZ) and Supply (SZ) Zon
 show_volume_v_marker    = input.bool(true, "Show Volume Surge 'V' Badge with Tooltip", group=grp_vis)
 vol_v_prev_day_pct      = input.float(50.0, "Volume vs Prev Day % Trigger (Default: +50%)", minval=10.0, maxval=200.0, step=5.0, group=grp_vis, tooltip="Triggers 'V' badge when volume is greater than this % over previous day")
 vol_v_21d_pct           = input.float(30.0, "Volume vs 21d Avg % Trigger (Significantly Increased/Decreased %)", minval=10.0, maxval=150.0, step=5.0, group=grp_vis, tooltip="Triggers 'V' badge when volume is significantly increased or decreased (+/- this %) vs 21d average volume")
-show_weekly_ribbon      = input.bool(true, "Show Bottom Ribbon: Weekly Trend (Triangle Up)", group=grp_vis)
-show_monthly_ribbon     = input.bool(true, "Show Bottom Ribbon: Monthly Trend (Triangle Down)", group=grp_vis)
-show_volume_ribbon      = input.bool(true, "Show Bottom Ribbon: Volume Conviction (Diamond)", group=grp_vis)
+show_weekly_ribbon      = input.bool(true, "Show Bottom Ribbon: Weekly Trend", group=grp_vis)
+show_volume_arrows      = input.bool(true, "Show Volume Trend Arrows (Up/Down)", group=grp_vis)
+vol_arrow_location      = input.string("Below Candle", "Volume Arrow Position", options=["Below Candle", "Bottom Ribbon"], group=grp_vis)
 show_hud_dashboard      = input.bool(true, "Show Top-Right Institutional HUD Dashboard Table", group=grp_vis)
 show_stats_table        = input.bool(true, "Show Bottom-Left Gate Rejection Statistics Table", group=grp_vis)
 show_legend_table       = input.bool(true, "Show Bottom-Right Strategy Legend Table", group=grp_vis)
@@ -680,26 +680,25 @@ if show_volume_v_marker and vol_v_triggered and not buy_action and not runner_ad
     label.new(bar_index, low, "V", color=v_col, textcolor=color.black, style=label.style_label_up, size=size.tiny, tooltip=vol_tip)
 
 // ------------------------------------------------------------------------------------------------
-// 11. BOTTOM MULTI-TIMEFRAME & VOLUME RIBBONS
+// 11. BOTTOM WEEKLY TREND RIBBON & VOLUME DIRECTION ARROWS (Zero-Noise Design)
 // ------------------------------------------------------------------------------------------------
-diamond_color = color.new(color.gray, 85)
-if (buy_action or is_touch) and vol_conv
-    diamond_color := color.orange
-else if vol_conv and is_green
-    diamond_color := color.blue
-else if vol_high and not is_green
-    diamond_color := color.fuchsia
+// Clean Weekly Trend Ribbon: Smooth baseline at bottom of chart (Lime = Bullish > EMA21, Red = Bearish)
+plotshape(show_weekly_ribbon, title="Weekly Trend Ribbon", location=location.bottom, color=weekly_ok ? color.lime : color.red, style=shape.square, size=size.tiny)
 
-plotshape(show_weekly_ribbon, title="Weekly Trend (Triangle Up)", location=location.bottom, color=weekly_ok ? color.lime : color.red, style=shape.triangleup, size=size.tiny)
-plotshape(show_monthly_ribbon, title="Monthly Trend (Triangle Down)", location=location.bottom, color=monthly_ok ? color.teal : color.maroon, style=shape.triangledown, size=size.tiny)
-plotshape(show_volume_ribbon, title="Volume Conviction (Diamond)", location=location.bottom, color=diamond_color, style=shape.diamond, size=size.tiny)
+// Volume Direction Arrows: Upward arrow if volume increases vs yesterday, Downward arrow if decreases
+vol_increased = volume > volume[1]
+vol_decreased = volume < volume[1]
+v_loc = vol_arrow_location == "Below Candle" ? location.belowbar : location.bottom
+
+plotshape(show_volume_arrows and vol_increased, title="Volume Up (Arrow Up)", location=v_loc, color=is_green ? color.new(#00e676, 20) : color.new(#ff5252, 20), style=shape.arrowup, size=size.tiny)
+plotshape(show_volume_arrows and vol_decreased, title="Volume Down (Arrow Down)", location=v_loc, color=color.new(#78909c, 40), style=shape.arrowdown, size=size.tiny)
 
 // ------------------------------------------------------------------------------------------------
-// 12. INSTITUTIONAL HUD DASHBOARD (Top-Right Live Table)
+// 12. INSTITUTIONAL HUD DASHBOARD (Top-Right Live Table with Monthly MTF)
 // ------------------------------------------------------------------------------------------------
 if show_hud_dashboard and barstate.islast
-    hud_cols = enable_custom_bench ? 10 : 9
-    var table hud = table.new(position.top_right, 10, 3, bgcolor=color.new(#0d1117, 10), border_width=2, border_color=color.new(#30363d, 0))
+    hud_cols = enable_custom_bench ? 11 : 10
+    var table hud = table.new(position.top_right, 11, 2, bgcolor=color.new(#0d1117, 10), border_width=2, border_color=color.new(#30363d, 0))
     t_sz = fn_size(hud_font_size)
     
     // Header Row
@@ -710,9 +709,10 @@ if show_hud_dashboard and barstate.islast
     table.cell(hud, 4, 0, enable_custom_bench ? ("vs " + custom_ticker) : "N/A", text_color=color.white, text_size=t_sz, bgcolor=color.new(#1f6feb, 20))
     table.cell(hud, 5, 0, "SCORE", text_color=color.white, text_size=t_sz, bgcolor=color.new(#1f6feb, 20))
     table.cell(hud, 6, 0, "IBD RS", text_color=color.white, text_size=t_sz, bgcolor=color.new(#1f6feb, 20))
-    table.cell(hud, 7, 0, "WIN RATE", text_color=color.white, text_size=t_sz, bgcolor=color.new(#1f6feb, 20))
-    table.cell(hud, 8, 0, "POSITION", text_color=color.white, text_size=t_sz, bgcolor=color.new(#1f6feb, 20))
-    table.cell(hud, 9, 0, "STAGE / SL", text_color=color.white, text_size=t_sz, bgcolor=color.new(#1f6feb, 20))
+    table.cell(hud, 7, 0, "MONTHLY", text_color=color.white, text_size=t_sz, bgcolor=color.new(#1f6feb, 20))
+    table.cell(hud, 8, 0, "WIN RATE", text_color=color.white, text_size=t_sz, bgcolor=color.new(#1f6feb, 20))
+    table.cell(hud, 9, 0, "POSITION", text_color=color.white, text_size=t_sz, bgcolor=color.new(#1f6feb, 20))
+    table.cell(hud, 10, 0, "STAGE / SL", text_color=color.white, text_size=t_sz, bgcolor=color.new(#1f6feb, 20))
     
     diff_sec = (s_perf - (not na(sec_p) ? sec_p : 0.0)) * 100.0
     diff_spy = (s_perf - (not na(sp_p) ? sp_p : 0.0)) * 100.0
@@ -743,9 +743,10 @@ if show_hud_dashboard and barstate.islast
     table.cell(hud, 4, 1, cust_str, text_color=color.white, text_size=t_sz, bgcolor=cust_bg)
     table.cell(hud, 5, 1, str.tostring(score, "#.#") + " / 7.0", text_color=score >= min_score_req ? color.lime : color.orange, text_size=t_sz)
     table.cell(hud, 6, 1, str.tostring(ibd_rs_rating, "#.#") + " / 100", text_color=ibd_rs_rating >= 70.0 ? color.lime : ibd_rs_rating >= 50.0 ? color.orange : color.red, text_size=t_sz)
-    table.cell(hud, 7, 1, str.tostring(wr_pct, "#.#") + "% (" + str.tostring(total_wins) + "W/" + str.tostring(total_losses) + "L)", text_color=wr_pct >= 55.0 ? color.lime : color.orange, text_size=t_sz)
-    table.cell(hud, 8, 1, pos_status_txt, text_color=color.white, text_size=t_sz, bgcolor=color.new(pos_status_col, 50))
-    table.cell(hud, 9, 1, stage_sl_txt, text_color=color.white, text_size=t_sz)
+    table.cell(hud, 7, 1, monthly_ok ? "Bullish ▲" : "Bearish ▼", text_color=color.white, text_size=t_sz, bgcolor=monthly_ok ? color.new(color.teal, 30) : color.new(color.maroon, 30))
+    table.cell(hud, 8, 1, str.tostring(wr_pct, "#.#") + "% (" + str.tostring(total_wins) + "W/" + str.tostring(total_losses) + "L)", text_color=wr_pct >= 55.0 ? color.lime : color.orange, text_size=t_sz)
+    table.cell(hud, 9, 1, pos_status_txt, text_color=color.white, text_size=t_sz, bgcolor=color.new(pos_status_col, 50))
+    table.cell(hud, 10, 1, stage_sl_txt, text_color=color.white, text_size=t_sz)
 
 // ------------------------------------------------------------------------------------------------
 // 13. GATE REJECTION STATISTICS TABLE (Bottom-Left Table - Prevents Chart Clutter)

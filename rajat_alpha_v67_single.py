@@ -814,15 +814,16 @@ class RajatAlphaAnalyzer:
             return self._regime_cache_value
             
         index_symbols = self.config.get('market_regime', 'index_symbols', ["SPY", "QQQ"])
+        ma_period = int(self.config.get('market_regime', 'index_ma_period', 50))
         is_bullish = True
         eval_notes = []
         for idx_sym in index_symbols:
-            df_idx = self.data_fetcher.get_daily_bars(idx_sym, days=250)
-            if df_idx is not None and len(df_idx) >= 50:
-                sma50 = ta.sma(df_idx['close'], length=50).iloc[-1]
+            df_idx = self.data_fetcher.get_daily_bars(idx_sym, days=max(250, ma_period + 50))
+            if df_idx is not None and len(df_idx) >= ma_period:
+                sma_val = ta.sma(df_idx['close'], length=ma_period).iloc[-1]
                 last_close = df_idx['close'].iloc[-1]
-                eval_notes.append(f"{idx_sym}: ${last_close:.2f} (50 SMA: ${sma50:.2f})")
-                if last_close < sma50:
+                eval_notes.append(f"{idx_sym}: ${last_close:.2f} ({ma_period} SMA: ${sma_val:.2f})")
+                if last_close < sma_val:
                     is_bullish = False
         
         self._regime_cache_time = now
@@ -1610,10 +1611,10 @@ class PositionManager:
             
         logger.info(f"[{symbol}] Executing Partial Exit {target_name}: {quantity} shares @ ${current_price:.2f}")
         try:
-            use_soee = self.config.get('order_routing', 'enable_soee_midpoint', True)
-            quote = self.data_fetcher.get_nbbo_quote(symbol) if use_soee else None
+            use_smart_soee = self.config.get('execution_schedule', 'enable_smart_execution', True)
+            quote = self.data_fetcher.get_latest_quote(symbol) if use_smart_soee else None
             
-            if quote and quote['spread'] > 0:
+            if quote and quote['mid'] > 0:
                 limit_px = quote['mid']
                 order_request = LimitOrderRequest(
                     symbol=symbol,
@@ -1668,11 +1669,11 @@ class PositionManager:
             
         logger.info(f"[{symbol}] Executing FULL EXIT: {remaining} shares @ ${current_price:.2f} (Reason: {reason})")
         try:
-            use_soee = self.config.get('order_routing', 'enable_soee_midpoint', True)
+            use_smart_soee = self.config.get('execution_schedule', 'enable_smart_execution', True)
             is_emergency = reason in ['Stop Loss', 'Catastrophic Breaker']
-            quote = self.data_fetcher.get_nbbo_quote(symbol) if (use_soee and not is_emergency) else None
+            quote = self.data_fetcher.get_latest_quote(symbol) if (use_smart_soee and not is_emergency) else None
             
-            if quote and quote['spread'] > 0:
+            if quote and quote['mid'] > 0:
                 limit_px = quote['mid']
                 order_request = LimitOrderRequest(
                     symbol=symbol,

@@ -68,7 +68,7 @@
 Every candidate symbol must pass through sequential institutional filters in exact priority order:
 
 ### Gate 0: Market Regime Gate
-- Evaluates benchmark indices (`SPY` and `QQQ`). When enabled, halts new buy orders if either index is trading below its 50 SMA. Existing positions continue to be managed normally.
+- Evaluates benchmark indices (`SPY` and `QQQ`). When enabled, halts new buy orders if either index is trading below its configured moving average (`index_ma_period: 50`, `100`, `125`, `150`, or `200`). Evaluated on a 30-minute cache interval to eliminate log clutter. Existing positions continue to be monitored normally.
 
 ### Gate 1 & 1.5: Market Structure & Regime-Adaptive Slope
 - **Structure**: Enforces `50 SMA > 200 SMA`, `Close > 200 SMA`, and `21 EMA >= 50 SMA - 2.5%`.
@@ -97,6 +97,10 @@ Supported candlestick reversal patterns with institutional conviction weightings
 - **Shooting Star Rejection**: Rejects any candle where the upper wick constitutes more than **50% of the daily high-low range** or exceeds **2x the real body size**.
 - **Stalling Filter**: Rejects stocks where the 8-day price range is `< 5.0%` (horizontal churn).
 - **Extended Stock**: Rejects candles gapping up `> 4.0%` above prior close.
+
+### Gate 6.5: Green Session Confirmation & Absorption Reversal Exemption
+- **Standard Session**: Requires the stock to close higher than yesterday's close (`Close > Prev_Close`). Green candles retain full pattern conviction (Hammer: 0.8, Engulfing/Piercing: 1.0).
+- **Absorption Reversal Exemption**: If nominally red vs. prior close, candles with deep buyer absorption (`lower_wick / range >= 0.55`, `close_position >= 0.70`, and within 1.0% of prior close) are permitted to pass with **partial conviction (weight: 0.5)**.
 
 ### Informational: IBD-Style Relative Strength Rating (0–100)
 - Calculates 1-year weighted relative performance vs. SPY (40% Q4 + 20% Q3 + 20% Q2 + 20% Q1).

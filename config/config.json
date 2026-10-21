@@ -149,6 +149,7 @@
   "market_regime": {
     "enable_index_gate": true,
     "index_symbols": ["SPY", "QQQ"],
+    "index_ma_period": 50,
     "index_above_sma50_required": true
   },
   "ma_slope_validation": {

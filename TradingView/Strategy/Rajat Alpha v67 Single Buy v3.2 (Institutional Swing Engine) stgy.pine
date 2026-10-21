@@ -359,10 +359,11 @@ if ta.change(time("D")) != 0
 max_trades_reached = enable_max_trades and (trades_executed_today >= max_trades_per_day)
 
 // Candidate Signal Evaluation
-// Strictly requires green session (Gate 6.5), trend structure, Gate 2 (Impulse + Pullback + Near MA), pattern/touch, weekly MTF, and maturity
-is_green_session = is_green and (prev_close > 0 ? close > prev_close : true)
-candidate_signal = is_green_session and structure_ok and gate2_ok and (pattern_hit or is_touch) and weekly_ok and is_mature
-is_valid_signal  = candidate_signal and market_regime_ok and not is_shooting_star and not is_extended and not is_stalling and not max_trades_reached and (score >= min_score_req)
+// Gate 6.5 Absorption Reversal: Long lower shadow >= 55% of range, closes in top 30% of range, within 1% of prev close
+is_absorption_rev = candle_range > 0 and (lower_shadow / candle_range >= 0.55) and ((close - low) / candle_range >= 0.70) and (prev_close > 0 ? close >= prev_close * 0.99 : true)
+is_green_session  = (is_green and (prev_close > 0 ? close > prev_close : true)) or is_absorption_rev
+candidate_signal  = is_green_session and structure_ok and gate2_ok and (pattern_hit or is_touch or is_absorption_rev) and weekly_ok and is_mature
+is_valid_signal   = candidate_signal and market_regime_ok and not is_shooting_star and not is_extended and not is_stalling and not max_trades_reached and (score >= min_score_req)
 
 // ------------------------------------------------------------------------------------------------
 // 8. STRATEGY POSITION STATE MACHINE & EXECUTION ENGINE

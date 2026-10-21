@@ -179,6 +179,17 @@ The system is configured via [`config/config.json`](file:///C:/Alpaca_Algo2.0/Si
 | `stage_3_marketable_limit` | `boolean` | `true` | Convert to marketable limit at timeout to guarantee fill |
 | `market_close_cutoff_time` | `string` | `"15:55"` | Cutoff time (ET) to convert all unfilled orders before close |
 
+### `trading_rules` & Position Sizing
+| Key | Type | Default | Description |
+| :--- | :--- | :--- | :--- |
+| `sizing_mode` | `string` | `"capital_pct"` | `"capital_pct"` (fixed capital %) or `"risk_based"` (equal risk contribution / ΔSL) |
+| `per_trade_pct` | `float` | `0.03` | Percentage of total equity per trade in `capital_pct` mode (3% = $3,000 on $100k account) |
+| `risk_per_trade_pct` | `float` | `0.005` | Target fractional risk in `risk_based` mode (0.5% risk = $500 on $100k account) |
+| `fixed_risk_dollars` | `float` | `500.0` | Fixed dollar risk override per trade (if > 0, risks exactly this amount) |
+| `max_allocation_per_stock_pct` | `float` | `0.06` | Hard capital ceiling per ticker (6% = $6,000 max). Guards tight stops from overleveraging |
+| `max_equity_utilization_pct` | `float` | `0.90` | Maximum portfolio capital utilization (90% of total equity) |
+| `capital_conservation_mode` | `boolean` | `false` | Automatically halves trade allocation when portfolio utilization $\ge 70\%$ of max limit |
+
 ### `candle_quality` & `pullback_validation`
 | Key | Type | Default | Description |
 | :--- | :--- | :--- | :--- |

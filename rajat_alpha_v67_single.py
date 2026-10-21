@@ -485,6 +485,15 @@ class ConfigManager:
             return default_val
         return default
 
+    def __getitem__(self, item):
+        return self.config[item]
+
+    def __setitem__(self, key, value):
+        self.config[key] = value
+
+    def __contains__(self, item):
+        return item in self.config
+
 # ================================================================================
 # MARKET DATA FETCHER (With API Resilience & Midpoint Quotes)
 # ================================================================================
@@ -1301,13 +1310,28 @@ class PositionManager:
         self.daily_buys = []
         self.daily_exits = []
 
-    def calculate_position_size(self, symbol: str, current_price: float) -> Tuple[int, float]:
+    def calculate_position_size(self, symbol: str, current_price: float, stop_loss: Optional[float] = None) -> Tuple[int, float]:
         """
-        Calculates position sizing:
-        - 3% per trade (configurable)
-        - Max 6% per stock (configurable)
-        - Enforces max_equity_utilization_pct (e.g. 90%)
-        - Capital conservation mode if utilization > 70% of max
+        Calculates position sizing according to configured sizing_mode:
+        
+        1. 'capital_pct' (Default / Institutional Baseline):
+           - Sized by percent of account equity per trade (e.g. 3.0%)
+           - trade_amount = equity * per_trade_pct
+           - shares = trade_amount / current_price
+           
+        2. 'risk_based' (Equal Risk Contribution / Volatility Parity):
+           - Sized by target dollar risk per trade divided by distance to Stop Loss
+           - dollar_risk = fixed_risk_dollars if > 0 else (equity * risk_per_trade_pct)
+           - delta_sl = current_price - stop_loss
+           - shares = int(dollar_risk / delta_sl)
+           
+        Institutional Guardrails Enforced Across Both Modes:
+        - Max per-stock allocation cap (e.g. max 6% of equity in any single ticker)
+        - Remaining stock headroom deduction if ticker already held
+        - Portfolio max equity utilization limit (e.g. 90%)
+        - Capital conservation mode (halves sizing if portfolio utilization >= 70% of max limit)
+        - Division-by-zero / minimum delta SL protection (floored at min_initial_sl_pct)
+        - Minimum shares sanity checks (returns 0 if cannot afford 1 share)
         """
         try:
             account = self.trading_client.get_account()
@@ -1316,49 +1340,109 @@ class PositionManager:
             logger.error(f"Failed to get account equity: {e}")
             return 0, 0.0
 
-        trade_pct = self.config.get('trading_rules', 'per_trade_pct', 0.03)
-        max_allocation_per_stock_pct = self.config.get('trading_rules', 'max_allocation_per_stock_pct', 0.06)
+        if equity <= 0 or current_price <= 0:
+            logger.warning(f"[{symbol}] Invalid equity (${equity}) or current price (${current_price})")
+            return 0, 0.0
 
-        # Calculate current allocation for this stock
+        sizing_mode = str(self.config.get('trading_rules', 'sizing_mode', 'capital_pct')).lower()
+        max_allocation_per_stock_pct = float(self.config.get('trading_rules', 'max_allocation_per_stock_pct', 0.06))
+        max_utilization_pct = float(self.config.get('trading_rules', 'max_equity_utilization_pct', 0.90))
+
+        # 1. Calculate current allocation for this stock
         open_positions = self.db.get_open_positions(symbol=symbol)
         current_allocation = sum(pos['entry_price'] * pos['remaining_qty'] for pos in open_positions)
-        current_allocation_pct = current_allocation / equity if equity > 0 else 0
+        current_allocation_pct = current_allocation / equity if equity > 0 else 0.0
 
-        # Remaining allocation for this stock
-        remaining_pct = max(0.0, max_allocation_per_stock_pct - current_allocation_pct)
-        effective_trade_pct = min(trade_pct, remaining_pct)
-
-        if effective_trade_pct <= 0:
+        # Remaining allocation headroom for this stock in dollars and percentage
+        max_stock_capital_allowed = round(max(0.0, (equity * max_allocation_per_stock_pct) - current_allocation), 2)
+        remaining_pct = max_stock_capital_allowed / equity if equity > 0 else 0.0
+        if max_stock_capital_allowed < current_price:
             logger.warning(f"[{symbol}] Per-stock allocation limit reached ({current_allocation_pct*100:.1f}% / {max_allocation_per_stock_pct*100:.1f}%), cannot add more")
             return 0, 0.0
 
-        # Total portfolio allocation
+        # 2. Portfolio-level total allocation & utilization
         total_open = self.db.get_open_positions()
         total_current_allocation = sum(pos['entry_price'] * pos['remaining_qty'] for pos in total_open)
-        max_utilization_pct = self.config.get('trading_rules', 'max_equity_utilization_pct', 0.90)
+        available_portfolio_capital = round(max(0.0, (equity * max_utilization_pct) - total_current_allocation), 2)
 
-        # Capital conservation mode check (if enabled and utilization >= 70% of max limit)
-        if self.config.get('trading_rules', 'capital_conservation_mode', False):
-            if (total_current_allocation / equity) >= (max_utilization_pct * 0.70):
-                effective_trade_pct = effective_trade_pct * 0.5  # Half position size in conservation mode
-
-        trade_amount = equity * effective_trade_pct
-        projected_utilization_pct = (total_current_allocation + trade_amount) / equity
-
-        if projected_utilization_pct > max_utilization_pct:
-            available_pct = max_utilization_pct - (total_current_allocation / equity)
-            if available_pct <= 0.001:
-                logger.warning(f"[{symbol}] Overall utilization limit reached ({projected_utilization_pct*100:.1f}% / {max_utilization_pct*100:.1f}%), blocking trade")
-                return 0, 0.0
-            trade_amount = equity * min(effective_trade_pct, available_pct)
-
-        shares = int(trade_amount / current_price)
-        actual_amount = shares * current_price
-        if shares <= 0:
-            logger.warning(f"[{symbol}] Trade size too small after limits")
+        if available_portfolio_capital < current_price:
+            logger.warning(f"[{symbol}] Overall utilization limit reached ({total_current_allocation/equity*100:.1f}% / {max_utilization_pct*100:.1f}%), blocking trade")
             return 0, 0.0
 
-        return shares, actual_amount
+        # 3. Sizing logic based on configured mode
+        if sizing_mode == 'risk_based':
+            # Target dollar risk: either fixed dollar amount (e.g. $500) or equity percentage (e.g. 0.5%)
+            fixed_dollars = float(self.config.get('trading_rules', 'fixed_risk_dollars', 0.0))
+            risk_pct = float(self.config.get('trading_rules', 'risk_per_trade_pct', 0.005))
+            dollar_risk = fixed_dollars if fixed_dollars > 0 else (equity * risk_pct)
+
+            # Determine risk distance per share (delta_sl = current_price - stop_loss)
+            min_sl_pct = float(self.config.get('risk_management', 'min_initial_sl_pct', 0.05))
+            if stop_loss is None or stop_loss >= current_price or (current_price - stop_loss) <= 0:
+                delta_sl = current_price * min_sl_pct
+                logger.info(f"[{symbol}] Stop loss not provided or invalid (${stop_loss}); using {min_sl_pct*100:.1f}% risk distance (${delta_sl:.2f})")
+            else:
+                delta_sl = current_price - stop_loss
+
+            # Ensure minimum delta_sl floor to prevent division by near-zero
+            min_floor_dist = max(0.10, current_price * 0.005)
+            delta_sl = max(delta_sl, min_floor_dist)
+
+            raw_shares = int(dollar_risk / delta_sl)
+            trade_amount = raw_shares * current_price
+
+            # Capital conservation mode check (halves size if utilization >= 70% of max limit)
+            if self.config.get('trading_rules', 'capital_conservation_mode', False):
+                if (total_current_allocation / equity) >= (max_utilization_pct * 0.70):
+                    trade_amount = trade_amount * 0.5
+                    logger.info(f"[{symbol}] Capital conservation mode active: Risk-based trade allocation halved")
+
+            # Apply stock allocation ceiling (cannot exceed remaining per-stock limit)
+            if trade_amount > max_stock_capital_allowed:
+                trade_amount = max_stock_capital_allowed
+
+            # Apply portfolio headroom ceiling
+            if trade_amount > available_portfolio_capital:
+                trade_amount = available_portfolio_capital
+
+            shares = int((trade_amount + 1e-4) / current_price)
+            actual_amount = shares * current_price
+
+            if shares <= 0:
+                logger.warning(f"[{symbol}] Risk-based shares resulted in 0 after applying caps")
+                return 0, 0.0
+
+            logger.info(f"[{symbol}] Position Sizing [RISK-BASED]: Target Risk=${dollar_risk:.2f}, SL Dist=${delta_sl:.2f} ({(delta_sl/current_price)*100:.1f}%), Raw Shares={raw_shares} -> Final Shares={shares} (${actual_amount:.2f}, {actual_amount/equity*100:.1f}% equity)")
+            return shares, actual_amount
+
+        else:
+            # Standard Capital % Allocation (Default 3% per trade)
+            trade_pct = float(self.config.get('trading_rules', 'per_trade_pct', 0.03))
+            effective_trade_pct = min(trade_pct, remaining_pct)
+
+            # Capital conservation mode check
+            if self.config.get('trading_rules', 'capital_conservation_mode', False):
+                if (total_current_allocation / equity) >= (max_utilization_pct * 0.70):
+                    effective_trade_pct = effective_trade_pct * 0.5
+
+            trade_amount = equity * effective_trade_pct
+            projected_utilization_pct = (total_current_allocation + trade_amount) / equity
+
+            if projected_utilization_pct > max_utilization_pct:
+                available_pct = max_utilization_pct - (total_current_allocation / equity)
+                if available_pct <= 0.001:
+                    logger.warning(f"[{symbol}] Overall utilization limit reached ({projected_utilization_pct*100:.1f}% / {max_utilization_pct*100:.1f}%), blocking trade")
+                    return 0, 0.0
+                trade_amount = equity * min(effective_trade_pct, available_pct)
+
+            shares = int((trade_amount + 1e-4) / current_price)
+            actual_amount = shares * current_price
+            if shares <= 0:
+                logger.warning(f"[{symbol}] Trade size too small after limits")
+                return 0, 0.0
+
+            logger.info(f"[{symbol}] Position Sizing [CAPITAL %]: Allocation={effective_trade_pct*100:.1f}%, Shares={shares} (${actual_amount:.2f})")
+            return shares, actual_amount
 
     def calculate_stop_loss(self, symbol: str, entry_price: float, score: float, df: Optional[pd.DataFrame] = None) -> float:
         """
@@ -1393,12 +1477,16 @@ class PositionManager:
         or Market Order depending on configuration
         """
         current_price = signal_details['price']
-        shares, target_val = self.calculate_position_size(symbol, current_price)
         score = signal_details.get('score', 4.0)
         
         df_daily = self.data_fetcher.get_daily_bars(symbol, days=50)
         stop_loss = self.calculate_stop_loss(symbol, current_price, score, df_daily)
+        shares, target_val = self.calculate_position_size(symbol, current_price, stop_loss)
         
+        if shares <= 0:
+            logger.warning(f"[{symbol}] Calculated position size is 0 shares, aborting buy execution")
+            return False
+            
         use_smart_soee = self.config.get('execution_schedule', 'enable_smart_execution', True)
         quote = self.data_fetcher.get_latest_quote(symbol) if use_smart_soee else None
         
@@ -2295,7 +2383,14 @@ class RajatAlphaTradingBot:
         lines.append("[BUYS EXECUTED TODAY]")
         if buys_rows:
             for b in buys_rows:
-                lines.append(f"  • {b[0]:<6} | Qty: {b[2]:>4} | Price: ${b[1]:>8.2f} | SL: ${b[3]:>8.2f} | Pattern: {b[4]} | Score: {b[5]:.1f} | RS: {b[6]:.1f}")
+                sym_b = str(b[0] or "")
+                px_b = float(b[1]) if b[1] is not None else 0.0
+                qty_b = int(b[2]) if b[2] is not None else 0
+                sl_b = float(b[3]) if b[3] is not None else 0.0
+                pat_b = str(b[4] or "Unknown")
+                score_b = f"{b[5]:.1f}" if b[5] is not None else "4.0"
+                rs_b = f"{b[6]:.1f}" if b[6] is not None else "50.0"
+                lines.append(f"  • {sym_b:<6} | Qty: {qty_b:>4} | Price: ${px_b:>8.2f} | SL: ${sl_b:>8.2f} | Pattern: {pat_b} | Score: {score_b} | RS: {rs_b}")
         else:
             lines.append("  (No new positions established today)")
             
@@ -2303,9 +2398,20 @@ class RajatAlphaTradingBot:
         lines.append("[EXITS & PROFIT TAKING TODAY]")
         if full_exits or partial_exits:
             for fe in full_exits:
-                lines.append(f"  • {fe[0]:<6} | FULL EXIT ({fe[5]}) | Qty: {fe[3]} @ ${fe[2]:.2f} (Entry: ${fe[1]:.2f}) | P/L: {fe[4]:+.2f}%")
+                sym_fe = str(fe[0] or "")
+                entry_fe = float(fe[1]) if fe[1] is not None else 0.0
+                exit_fe = float(fe[2]) if fe[2] is not None else 0.0
+                qty_fe = int(fe[3]) if fe[3] is not None else 0
+                pnl_fe = float(fe[4]) if fe[4] is not None else 0.0
+                reason_fe = str(fe[5] or "Exit")
+                lines.append(f"  • {sym_fe:<6} | FULL EXIT ({reason_fe}) | Qty: {qty_fe} @ ${exit_fe:.2f} (Entry: ${entry_fe:.2f}) | P/L: {pnl_fe:+.2f}%")
             for pe in partial_exits:
-                lines.append(f"  • {pe[0]:<6} | PARTIAL EXIT {pe[1]} | Qty: {pe[2]} @ ${pe[3]:.2f} | Profit: {pe[4]:+.2f}%")
+                sym_pe = str(pe[0] or "")
+                pt_pe = str(pe[1] or "PT")
+                qty_pe = int(pe[2]) if pe[2] is not None else 0
+                exit_pe = float(pe[3]) if pe[3] is not None else 0.0
+                pnl_pe = float(pe[4]) if pe[4] is not None else 0.0
+                lines.append(f"  • {sym_pe:<6} | PARTIAL EXIT {pt_pe} | Qty: {qty_pe} @ ${exit_pe:.2f} | Profit: {pnl_pe:+.2f}%")
         else:
             lines.append("  (No positions exited today)")
             

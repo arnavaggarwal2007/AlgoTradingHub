@@ -329,11 +329,13 @@ class Trade:
         self.partial_exits = set()
 
 def run_backtest_simulation(all_data: Dict[str, pd.DataFrame], qqq_df: pd.DataFrame, 
-                            mode: str = "v32") -> List[Trade]:
+                            mode: str = "v32", sizing_mode: str = "capital_pct") -> List[Trade]:
     """
     Simulates portfolio trading:
     - Mode 'baseline': Old v67 (Market orders with 0.30% slippage, 17% fixed SL, 21d fixed TES, 2-tier exit)
     - Mode 'v32': New v3.2 (SOEE Midpoint with 0.05% slippage, Hybrid ATR SL, 4-tier exits, Dynamic TES, Runner mode)
+    - Sizing Mode 'capital_pct': Fixed 3% capital allocation per trade ($3,000 on $100k)
+    - Sizing Mode 'risk_based': Fixed 0.5% dollar risk per trade ($500 / delta_sl), capped at 6% allocation ($6,000)
     """
     closed_trades: List[Trade] = []
     open_trades: List[Trade] = []
@@ -459,13 +461,18 @@ def run_backtest_simulation(all_data: Dict[str, pd.DataFrame], qqq_df: pd.DataFr
                     init_sl = entry_px - (2.0 * atr) if atr > 0 else entry_px * 0.83
                     init_sl = max(entry_px * 0.83, min(entry_px * 0.95, init_sl))
                     
-                    # Position Sizing: Fixed fractional risk vs fixed allocation
-                    # Method: Risk 0.5% equity ($500) per trade based on SL distance
-                    dollar_risk = 500.0
-                    risk_per_share = max(0.50, entry_px - init_sl)
-                    shares = max(1, int(dollar_risk / risk_per_share))
-                    # Bound to max 6% allocation ($6,000)
-                    shares = min(shares, max(1, int(6000.0 / entry_px)))
+                    # Position Sizing: Approach 1 (Fixed 3% Capital) vs Approach 2 (0.5% Risk / Delta SL)
+                    if sizing_mode == "risk_based":
+                        dollar_risk = 500.0  # 0.5% of $100k equity
+                        risk_per_share = max(0.50, entry_px - init_sl)
+                        raw_shares = max(1, int(dollar_risk / risk_per_share))
+                        # Bound to max 6% allocation ($6,000)
+                        max_shares = max(1, int(6000.0 / entry_px))
+                        shares = min(raw_shares, max_shares)
+                    else:
+                        # Approach 1: Fixed 3% capital allocation ($3,000 on $100k equity)
+                        shares = max(1, int(3000.0 / entry_px))
+
                     open_trades.append(Trade(sym, dt, entry_px, init_sl, shares, is_v32=True))
             else:
                 # Old baseline: looser entry, 17% fixed SL, market order slippage
@@ -519,6 +526,7 @@ def generate_performance_metrics(trades: List[Trade], title: str) -> Dict:
     print(f" Maximum Equity Drawdown:     ${max_dd:,.2f}")
     print("="*70)
     
+    max_loss = min(pnls) if pnls else 0.0
     return {
         'trades': len(trades),
         'win_rate': win_rate,
@@ -529,13 +537,17 @@ def generate_performance_metrics(trades: List[Trade], title: str) -> Dict:
         'avg_win': avg_win,
         'avg_loss': avg_loss,
         'expectancy': expectancy,
-        'max_dd': max_dd
+        'max_dd': max_dd,
+        'max_loss': max_loss,
+        'return_pct': (total_pnl / 100000.0) * 100.0
     }
 
-def plot_backtest_dashboard(v32_trades: List[Trade], baseline_trades: Optional[List[Trade]] = None, save_path: str = "v32_backtest_dashboard.png"):
+def plot_backtest_dashboard(v32_trades: List[Trade], baseline_trades: Optional[List[Trade]] = None, 
+                            capital_trades: Optional[List[Trade]] = None,
+                            save_path: str = "v32_backtest_dashboard.png"):
     """
     Renders a comprehensive 4-panel visual dashboard:
-    1. Cumulative Equity Curve ($): New v3.2 Institutional vs Old Baseline
+    1. Cumulative Equity Curve ($): Approach 2 (Risk-Based) vs Approach 1 (Fixed Capital) vs Old Baseline
     2. Trade Outcome Breakdown (Pie Chart): Wins vs Losses
     3. Exit Reasons Breakdown (Pie Chart): Profit Targets, Runner, TES, Stop Loss
     4. Trade P/L (%) Distribution Histogram / Bar Chart
@@ -551,13 +563,17 @@ def plot_backtest_dashboard(v32_trades: List[Trade], baseline_trades: Optional[L
         # 1. CUMULATIVE EQUITY CURVE
         ax1 = axes[0, 0]
         v32_pnl = np.cumsum([t.realized_pnl for t in v32_trades])
-        ax1.plot(range(1, len(v32_pnl) + 1), v32_pnl, label="v3.2 Institutional (SOEE + Hybrid ATR)", color='#10b981', linewidth=2.5)
+        ax1.plot(range(1, len(v32_pnl) + 1), v32_pnl, label="v3.2 Approach 2: Risk-Based ($500 / ΔSL)", color='#10b981', linewidth=2.5)
         
+        if capital_trades:
+            cap_pnl = np.cumsum([t.realized_pnl for t in capital_trades])
+            ax1.plot(range(1, len(cap_pnl) + 1), cap_pnl, label="v3.2 Approach 1: Fixed 3% Capital ($3k)", color='#3b82f6', linewidth=2.0, linestyle='-.')
+
         if baseline_trades:
             base_pnl = np.cumsum([t.realized_pnl for t in baseline_trades])
             ax1.plot(range(1, len(base_pnl) + 1), base_pnl, label="Old Baseline (Market Orders + 17% SL)", color='#ef4444', linewidth=1.8, linestyle='--')
             
-        ax1.set_title("Cumulative Equity Curve ($)", fontsize=14, fontweight='bold')
+        ax1.set_title("Cumulative Equity Curve Comparison ($)", fontsize=14, fontweight='bold')
         ax1.set_xlabel("Trade Sequence Number")
         ax1.set_ylabel("Net Realized Profit / Loss ($)")
         ax1.grid(True, alpha=0.3)
@@ -650,35 +666,69 @@ def main(tickers: Optional[List[str]] = None, lookback_years: int = 3):
     print(f"Successfully processed indicators for {len(all_data)} tickers.")
     
     # Run Baseline Simulation
-    print("\n[1/2] Running Old v67 Baseline Simulation...")
+    print("\n[1/3] Running Old v67 Baseline Simulation (Market Orders & Fixed 17% SL)...")
     baseline_trades = run_backtest_simulation(all_data, qqq_df, mode="baseline")
     m_base = generate_performance_metrics(baseline_trades, "OLD V67 BASELINE (MARKET ORDERS & FIXED 17% SL)")
     
-    # Run Institutional v3.2 Simulation
-    print("\n[2/2] Running New v3.2 Institutional Simulation...")
-    v32_trades = run_backtest_simulation(all_data, qqq_df, mode="v32")
-    m_v32 = generate_performance_metrics(v32_trades, "NEW V3.2 INSTITUTIONAL (SOEE & HYBRID ATR)")
+    # Run Institutional v3.2 Simulation - Approach 1: Fixed 3% Capital Allocation
+    print("\n[2/3] Running v3.2 Approach 1 (Fixed 3% Capital Allocation - $3,000 / trade)...")
+    v32_capital_trades = run_backtest_simulation(all_data, qqq_df, mode="v32", sizing_mode="capital_pct")
+    m_cap = generate_performance_metrics(v32_capital_trades, "V3.2 APPROACH 1: FIXED 3% CAPITAL ALLOCATION ($3k/TRADE)")
     
-    # Comparison Table
-    if m_base and m_v32:
+    # Run Institutional v3.2 Simulation - Approach 2: Risk-Based Sizing (0.5% Risk / ΔSL)
+    print("\n[3/3] Running v3.2 Approach 2 (Risk-Based Equal Risk Contribution - $500 Risk / ΔSL)...")
+    v32_risk_trades = run_backtest_simulation(all_data, qqq_df, mode="v32", sizing_mode="risk_based")
+    m_risk = generate_performance_metrics(v32_risk_trades, "V3.2 APPROACH 2: EQUAL RISK CONTRIBUTION ($500 RISK / ΔSL)")
+    
+    # 1. Strategy Upgrade Comparison Table
+    if m_base and m_risk:
         print("\n" + "="*80)
-        print("== STRATEGY UPGRADE COMPARISON TABLE ==")
+        print("== 1. STRATEGY UPGRADE AUDIT: BASELINE VS INSTITUTIONAL V3.2 ==")
         print("="*80)
         print(f"{'Performance Metric':<30} | {'Old Baseline':<20} | {'New v3.2 Institutional':<20}")
         print("-" * 76)
-        print(f"{'Total Trades':<30} | {m_base['trades']:<20} | {m_v32['trades']:<20}")
-        print(f"{'Win Rate (%)':<30} | {m_base['win_rate']:<19.1f}% | {m_v32['win_rate']:<19.1f}%")
-        print(f"{'Total Realized P/L ($)':<30} | ${m_base['total_pnl']:<19,.2f} | ${m_v32['total_pnl']:<19,.2f}")
-        print(f"{'Profit Factor':<30} | {m_base['profit_factor']:<20.2f} | {m_v32['profit_factor']:<20.2f}")
-        print(f"{'Average Win ($)':<30} | ${m_base['avg_win']:<19,.2f} | ${m_v32['avg_win']:<19,.2f}")
-        print(f"{'Average Loss ($)':<30} | ${m_base['avg_loss']:<19,.2f} | ${m_v32['avg_loss']:<19,.2f}")
-        print(f"{'Trade Expectancy ($)':<30} | ${m_base['expectancy']:<19,.2f} | ${m_v32['expectancy']:<19,.2f}")
-        print(f"{'Maximum Drawdown ($)':<30} | ${m_base['max_dd']:<19,.2f} | ${m_v32['max_dd']:<19,.2f}")
+        print(f"{'Total Trades':<30} | {m_base['trades']:<20} | {m_risk['trades']:<20}")
+        print(f"{'Win Rate (%)':<30} | {m_base['win_rate']:<19.1f}% | {m_risk['win_rate']:<19.1f}%")
+        print(f"{'Total Realized P/L ($)':<30} | ${m_base['total_pnl']:<19,.2f} | ${m_risk['total_pnl']:<19,.2f}")
+        print(f"{'Total Return on $100k (%)':<30} | {m_base.get('return_pct', 0.0):<19.1f}% | {m_risk.get('return_pct', 0.0):<19.1f}%")
+        print(f"{'Profit Factor':<30} | {m_base['profit_factor']:<20.2f} | {m_risk['profit_factor']:<20.2f}")
+        print(f"{'Average Win ($)':<30} | ${m_base['avg_win']:<19,.2f} | ${m_risk['avg_win']:<19,.2f}")
+        print(f"{'Average Loss ($)':<30} | ${m_base['avg_loss']:<19,.2f} | ${m_risk['avg_loss']:<19,.2f}")
+        print(f"{'Trade Expectancy ($)':<30} | ${m_base['expectancy']:<19,.2f} | ${m_risk['expectancy']:<19,.2f}")
+        print(f"{'Maximum Drawdown ($)':<30} | ${m_base['max_dd']:<19,.2f} | ${m_risk['max_dd']:<19,.2f}")
         print("="*80)
+
+    # 2. Position Sizing Comparison Table: Approach 1 (Fixed Capital) vs Approach 2 (Risk-Based)
+    if m_cap and m_risk:
+        print("\n" + "="*86)
+        print("== 2. POSITION SIZING COMPARISON: APPROACH 1 (CAPITAL %) VS APPROACH 2 (RISK-BASED) ==")
+        print("="*86)
+        print(f"{'Sizing Performance Metric':<32} | {'Approach 1 (Fixed 3% Cap)':<24} | {'Approach 2 (0.5% Risk / ΔSL)':<24}")
+        print("-" * 86)
+        print(f"{'Total Trades Executed':<32} | {m_cap['trades']:<24} | {m_risk['trades']:<24}")
+        print(f"{'Win Rate (%)':<32} | {m_cap['win_rate']:<23.1f}% | {m_risk['win_rate']:<23.1f}%")
+        print(f"{'Total Realized Profit ($)':<32} | ${m_cap['total_pnl']:<23,.2f} | ${m_risk['total_pnl']:<23,.2f}")
+        print(f"{'Total Net Return on $100k (%)':<32} | {m_cap.get('return_pct', 0.0):<23.1f}% | {m_risk.get('return_pct', 0.0):<23.1f}%")
+        print(f"{'Profit Factor':<32} | {m_cap['profit_factor']:<24.2f} | {m_risk['profit_factor']:<24.2f}")
+        print(f"{'Average Winning Trade ($)':<32} | ${m_cap['avg_win']:<23,.2f} | ${m_risk['avg_win']:<23,.2f}")
+        print(f"{'Average Losing Trade ($)':<32} | ${m_cap['avg_loss']:<23,.2f} | ${m_risk['avg_loss']:<23,.2f}")
+        ratio_cap = abs(m_cap['avg_win'] / m_cap['avg_loss']) if m_cap['avg_loss'] != 0 else 0
+        ratio_risk = abs(m_risk['avg_win'] / m_risk['avg_loss']) if m_risk['avg_loss'] != 0 else 0
+        print(f"{'Win / Loss Dollar Ratio':<32} | {ratio_cap:<24.2f} | {ratio_risk:<24.2f}")
+        print(f"{'Trade Expectancy ($/trade)':<32} | ${m_cap['expectancy']:<23,.2f} | ${m_risk['expectancy']:<23,.2f}")
+        print(f"{'Max Single Trade Loss ($)':<32} | ${m_cap.get('max_loss', 0.0):<23,.2f} | ${m_risk.get('max_loss', 0.0):<23,.2f}")
+        print(f"{'Maximum Equity Drawdown ($)':<32} | ${m_cap['max_dd']:<23,.2f} | ${m_risk['max_dd']:<23,.2f}")
+        print("="*86)
+        print("Institutional Summary:")
+        print("  • Approach 1 (Fixed 3% Capital): Sizes purely on share price. A wide-stop volatile stock causes larger $ drawdowns.")
+        print("  • Approach 2 (Risk-Based Equal Risk): Normalizes portfolio loss to exactly ~$500 per trade regardless of volatility.")
+        print("    High-conviction tight-stop setups take larger positions (up to 6% cap), compounding winning trades faster.")
+        print("="*86)
         
     # Plot Visual Dashboard
     print("\nGenerating visual performance charts...")
-    plot_backtest_dashboard(v32_trades, baseline_trades, save_path="v32_backtest_dashboard.png")
+    plot_backtest_dashboard(v32_trades=v32_risk_trades, baseline_trades=baseline_trades, 
+                            capital_trades=v32_capital_trades, save_path="v32_backtest_dashboard.png")
 
 if __name__ == "__main__":
     main()

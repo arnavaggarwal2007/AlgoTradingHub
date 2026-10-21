@@ -21,8 +21,11 @@
     "max_equity_utilization_pct": 0.9,
     "enable_dynamic_position_limits": true,
     "capital_conservation_mode": false,
-    "max_allocation_per_stock_pct": 0.06,
+    "sizing_mode": "capital_pct",
     "per_trade_pct": 0.03,
+    "risk_per_trade_pct": 0.005,
+    "fixed_risk_dollars": 500.0,
+    "max_allocation_per_stock_pct": 0.06,
     "enable_swing_signals": true,
     "enable_21touch_signals": true,
     "enable_50touch_signals": true

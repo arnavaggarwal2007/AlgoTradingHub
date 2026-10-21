@@ -45,6 +45,12 @@ strategy("Rajat Alpha v67 Single Buy v3.2 (Institutional Swing Engine) stgy", ov
 // 1. INPUT PARAMETERS (Full Institutional Configuration)
 // ------------------------------------------------------------------------------------------------
 
+// --- Group: Position Sizing & Risk Allocation ---
+grp_size = "0. Position Sizing & Allocation"
+sizing_mode_input       = input.string("Percent of Equity (3%)", "Position Sizing Mode", options=["Percent of Equity (3%)", "Risk-Based ($ Risk / SL Dist)"], group=grp_size)
+fixed_risk_dollars      = input.float(500.0, "Risk-Based: Dollar Risk per Trade ($)", minval=10.0, step=50.0, group=grp_size)
+max_stock_alloc_pct     = input.float(6.0, "Max Capital Allocation per Stock (%)", minval=1.0, maxval=20.0, step=0.5, group=grp_size)
+
 // --- Group: General & Market Regime ---
 grp_gen = "1. General & Benchmarks"
 sector_ticker           = input.symbol("BATS:XLK", "Sector Benchmark ETF", group=grp_gen)
@@ -389,7 +395,14 @@ if buy_action and barstate.isconfirmed
     atr_dist := math.max(pos_entry * min_sl_pct, math.min(pos_entry * max_sl_pct, atr_dist))
     pos_sl   := pos_entry - atr_dist
     
-    strategy.entry("B1", strategy.long, comment="B1 Entry (" + str.tostring(score, "#.#") + ")")
+    if sizing_mode_input == "Risk-Based ($ Risk / SL Dist)"
+        dollar_risk_share = math.max(pos_entry * 0.005, pos_entry - pos_sl)
+        raw_qty = math.floor(fixed_risk_dollars / dollar_risk_share)
+        max_shares = math.floor((strategy.equity * (max_stock_alloc_pct / 100.0)) / pos_entry)
+        calc_qty = math.max(1.0, math.min(raw_qty, max_shares))
+        strategy.entry("B1", strategy.long, qty=calc_qty, comment="B1 Entry (" + str.tostring(score, "#.#") + ")")
+    else
+        strategy.entry("B1", strategy.long, comment="B1 Entry (" + str.tostring(score, "#.#") + ")")
 
 if in_position and barstate.isconfirmed
     held_days  = bar_index - pos_bar

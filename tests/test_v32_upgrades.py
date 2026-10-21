@@ -357,6 +357,82 @@ class TestRajatAlphaV32Upgrades(unittest.TestCase):
         self.assertIn("END-OF-DAY MARKET CLOSE EXECUTIVE SNAPSHOT", content)
         self.assertIn("SNAP_TEST", content)
 
+    @patch('rajat_alpha_v67_single.StockHistoricalDataClient')
+    @patch('rajat_alpha_v67_single.TradingClient')
+    def test_position_sizing_capital_pct_mode(self, mock_trading, mock_data):
+        """Test default capital_pct mode (3% per trade, 6% stock max)"""
+        bot = RajatAlphaTradingBot(config_path='config/config.json')
+        bot.db = self.db
+        
+        # Mock account equity = $100,000
+        mock_acc = MagicMock()
+        mock_acc.equity = 100000.0
+        bot.trading_client.get_account.return_value = mock_acc
+        
+        # In capital_pct mode with 3% trade size on $100 stock:
+        # trade_amount = $100,000 * 0.03 = $3,000 -> 30 shares
+        shares, amt = bot.position_manager.calculate_position_size('TEST_CAP', 100.0)
+        self.assertEqual(shares, 30)
+        self.assertEqual(amt, 3000.0)
+
+    @patch('rajat_alpha_v67_single.StockHistoricalDataClient')
+    @patch('rajat_alpha_v67_single.TradingClient')
+    def test_position_sizing_risk_based_mode(self, mock_trading, mock_data):
+        """Test risk_based mode with dollar risk / delta SL formula and 6% capital ceiling"""
+        bot = RajatAlphaTradingBot(config_path='config/config.json')
+        bot.db = self.db
+        bot.config['trading_rules']['sizing_mode'] = 'risk_based'
+        bot.config['trading_rules']['fixed_risk_dollars'] = 500.0
+        bot.config['trading_rules']['max_allocation_per_stock_pct'] = 0.06
+        
+        mock_acc = MagicMock()
+        mock_acc.equity = 100000.0
+        bot.trading_client.get_account.return_value = mock_acc
+        
+        # Scenario A: Wide SL ($100 stock, $90 SL -> delta_sl = $10)
+        # Raw shares = $500 / $10 = 50 shares ($5,000 <= $6,000 cap)
+        shares_a, amt_a = bot.position_manager.calculate_position_size('TEST_RISK_WIDE', 100.0, stop_loss=90.0)
+        self.assertEqual(shares_a, 50)
+        self.assertEqual(amt_a, 5000.0)
+        
+        # Scenario B: Tight SL ($100 stock, $98 SL -> delta_sl = $2)
+        # Raw shares = $500 / $2 = 250 shares ($25,000)
+        # Must be capped by max_allocation_per_stock_pct (6% of $100,000 = $6,000 -> 60 shares)
+        shares_b, amt_b = bot.position_manager.calculate_position_size('TEST_RISK_TIGHT', 100.0, stop_loss=98.0)
+        self.assertEqual(shares_b, 60)
+        self.assertEqual(amt_b, 6000.0)
+
+    @patch('rajat_alpha_v67_single.StockHistoricalDataClient')
+    @patch('rajat_alpha_v67_single.TradingClient')
+    def test_position_sizing_risk_based_edge_cases(self, mock_trading, mock_data):
+        """Test edge cases: missing stop_loss, inverted stop_loss, and remaining stock headroom"""
+        bot = RajatAlphaTradingBot(config_path='config/config.json')
+        bot.db = self.db
+        bot.position_manager.db = self.db
+        bot.config['trading_rules']['sizing_mode'] = 'risk_based'
+        bot.config['trading_rules']['fixed_risk_dollars'] = 500.0
+        bot.config['trading_rules']['max_allocation_per_stock_pct'] = 0.06
+        bot.config['trading_rules']['capital_conservation_mode'] = False
+        
+        mock_acc = MagicMock()
+        mock_acc.equity = 100000.0
+        bot.trading_client.get_account.return_value = mock_acc
+        
+        # Edge Case 1: Missing stop loss (defaults to min_initial_sl_pct 5% risk -> delta = $5)
+        # Raw shares = $500 / $5 = 100 shares ($10,000) -> capped at 6% ($6,000 -> 60 shares)
+        shares_1, amt_1 = bot.position_manager.calculate_position_size('TEST_NO_SL', 100.0, stop_loss=None)
+        self.assertEqual(shares_1, 60)
+        
+        # Edge Case 2: Inverted stop loss (SL > price -> falls back to min_initial_sl_pct)
+        shares_2, amt_2 = bot.position_manager.calculate_position_size('TEST_INV_SL', 100.0, stop_loss=105.0)
+        self.assertEqual(shares_2, 60)
+        
+        # Edge Case 3: Stock already holds 40 shares ($4,000). Only 20 shares ($2,000) remain under 6% ($6,000) cap.
+        self.db.add_position('TEST_EXISTING', 100.0, 40, 90.0, 4.5)
+        shares_3, amt_3 = bot.position_manager.calculate_position_size('TEST_EXISTING', 100.0, stop_loss=90.0)
+        self.assertEqual(shares_3, 20)
+        self.assertEqual(amt_3, 2000.0)
+
 if __name__ == '__main__':
     unittest.main()
 

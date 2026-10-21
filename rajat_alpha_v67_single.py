@@ -1603,19 +1603,35 @@ class PositionManager:
         return exits_to_execute
 
     def execute_partial_exit(self, position: Dict, target_name: str, quantity: int, current_price: float):
-        """Execute partial exit and activate runner mode if PT3 reached"""
+        """Execute partial exit using SOEE midpoint limit order and activate runner mode if PT3 reached"""
         symbol = position['symbol']
         if quantity > position['remaining_qty'] or quantity <= 0:
             return
             
         logger.info(f"[{symbol}] Executing Partial Exit {target_name}: {quantity} shares @ ${current_price:.2f}")
         try:
-            order_request = MarketOrderRequest(
-                symbol=symbol,
-                qty=quantity,
-                side=OrderSide.SELL,
-                time_in_force=TimeInForce.DAY
-            )
+            use_soee = self.config.get('order_routing', 'enable_soee_midpoint', True)
+            quote = self.data_fetcher.get_nbbo_quote(symbol) if use_soee else None
+            
+            if quote and quote['spread'] > 0:
+                limit_px = quote['mid']
+                order_request = LimitOrderRequest(
+                    symbol=symbol,
+                    qty=quantity,
+                    limit_price=limit_px,
+                    side=OrderSide.SELL,
+                    time_in_force=TimeInForce.DAY
+                )
+                logger.info(f"[{symbol}] SOEE Midpoint Limit Sell submitted: {quantity} shares @ ${limit_px:.2f} (Spread: ${quote['spread']:.2f})")
+            else:
+                order_request = MarketOrderRequest(
+                    symbol=symbol,
+                    qty=quantity,
+                    side=OrderSide.SELL,
+                    time_in_force=TimeInForce.DAY
+                )
+                logger.info(f"[{symbol}] Market Sell submitted: {quantity} shares @ ~${current_price:.2f}")
+
             self.trading_client.submit_order(order_request)
             
             profit_pct = (current_price - position['entry_price']) / position['entry_price'] * 100
@@ -1652,12 +1668,30 @@ class PositionManager:
             
         logger.info(f"[{symbol}] Executing FULL EXIT: {remaining} shares @ ${current_price:.2f} (Reason: {reason})")
         try:
-            order_request = MarketOrderRequest(
-                symbol=symbol,
-                qty=remaining,
-                side=OrderSide.SELL,
-                time_in_force=TimeInForce.DAY
-            )
+            use_soee = self.config.get('order_routing', 'enable_soee_midpoint', True)
+            is_emergency = reason in ['Stop Loss', 'Catastrophic Breaker']
+            quote = self.data_fetcher.get_nbbo_quote(symbol) if (use_soee and not is_emergency) else None
+            
+            if quote and quote['spread'] > 0:
+                limit_px = quote['mid']
+                order_request = LimitOrderRequest(
+                    symbol=symbol,
+                    qty=remaining,
+                    limit_price=limit_px,
+                    side=OrderSide.SELL,
+                    time_in_force=TimeInForce.DAY
+                )
+                logger.info(f"[{symbol}] SOEE Midpoint Limit Full Exit submitted: {remaining} shares @ ${limit_px:.2f} (Spread: ${quote['spread']:.2f})")
+            else:
+                order_request = MarketOrderRequest(
+                    symbol=symbol,
+                    qty=remaining,
+                    side=OrderSide.SELL,
+                    time_in_force=TimeInForce.DAY
+                )
+                order_desc = "Emergency Market Sell" if is_emergency else "Market Sell"
+                logger.info(f"[{symbol}] {order_desc} submitted: {remaining} shares @ ~${current_price:.2f}")
+
             self.trading_client.submit_order(order_request)
             self.db.close_position(position['id'], current_price, reason)
             profit_pct = (current_price - position['entry_price']) / position['entry_price'] * 100

@@ -150,7 +150,7 @@
     "enable_index_gate": true,
     "index_symbols": ["SPY", "QQQ"],
     "index_ma_period": 50,
-    "index_above_sma50_required": true
+    "index_above_sma_required": true
   },
   "ma_slope_validation": {
     "enable": true,

@@ -805,8 +805,11 @@ class RajatAlphaAnalyzer:
                 state['last_sma50_touch_bar'] = len(df) - 1
     
     def check_market_regime(self) -> bool:
-        """Verify broad market regime (SPY & QQQ > 50 SMA) with 30-minute caching"""
-        if not self.config.get('market_regime', 'enable_index_gate', True):
+        """Verify broad market regime (SPY & QQQ > configured SMA) with 30-minute caching"""
+        enable_gate = self.config.get('market_regime', 'enable_index_gate', True)
+        above_sma_req = self.config.get('market_regime', 'index_above_sma_required',
+                        self.config.get('market_regime', 'index_above_sma50_required', True))
+        if not (enable_gate and above_sma_req):
             return True
             
         now = datetime.now()
@@ -817,8 +820,10 @@ class RajatAlphaAnalyzer:
         ma_period = int(self.config.get('market_regime', 'index_ma_period', 50))
         is_bullish = True
         eval_notes = []
+        # Ensure sufficient calendar days to cover weekends and market holidays
+        calendar_days = max(365, int(ma_period * 1.5) + 60)
         for idx_sym in index_symbols:
-            df_idx = self.data_fetcher.get_daily_bars(idx_sym, days=max(250, ma_period + 50))
+            df_idx = self.data_fetcher.get_daily_bars(idx_sym, days=calendar_days)
             if df_idx is not None and len(df_idx) >= ma_period:
                 sma_val = ta.sma(df_idx['close'], length=ma_period).iloc[-1]
                 last_close = df_idx['close'].iloc[-1]

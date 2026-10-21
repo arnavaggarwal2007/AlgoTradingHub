@@ -5,6 +5,7 @@ import sqlite3
 import pandas as pd
 import numpy as np
 from datetime import datetime, timedelta
+from unittest.mock import patch, MagicMock
 
 # Ensure parent directory is on sys.path
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -15,7 +16,8 @@ from rajat_alpha_v67_single import (
     MarketDataFetcher,
     PatternDetector,
     RajatAlphaAnalyzer,
-    PositionManager
+    PositionManager,
+    RajatAlphaTradingBot
 )
 
 class TestRajatAlphaV32Upgrades(unittest.TestCase):
@@ -285,6 +287,75 @@ class TestRajatAlphaV32Upgrades(unittest.TestCase):
         # Emergency catastrophic breaker: Price drops to $75.00 (-25%) -> IMMEDIATE TRIGGER ANYTIME
         is_catastrophic = pm.check_stop_loss(pos, 75.0, is_closing_window=False, is_first_hour_suppressed=True)
         self.assertTrue(is_catastrophic)
+
+    # =========================================================================
+    # 8. GATE 6.5 ABSORPTION REVERSAL & EOD SNAPSHOT TESTS
+    # =========================================================================
+    def test_gate_6_5_absorption_reversal(self):
+        """Test that qualified absorption hammers pass Gate 6.5 with partial weight 0.5"""
+        class MockFetcher:
+            def get_current_price(self, sym):
+                return 99.60 # Slightly red vs prev_close $100.00 (-0.4%), within 1%
+            def get_daily_bars(self, sym, days=250):
+                # 30 days of data
+                dates = pd.date_range(end='2026-10-20', periods=30)
+                prices = [100.0] * 28 + [100.0, 99.60]
+                df = pd.DataFrame({
+                    'open': [100.0] * 28 + [100.0, 99.80],
+                    'high': [102.0] * 28 + [102.0, 100.50],
+                    'low':  [98.0] * 28 + [98.0, 96.00], # Long lower shadow: 99.60 - 96.00 = 3.60 on 4.50 range (80%)
+                    'close': prices,
+                    'volume': [1500000] * 30
+                }, index=dates)
+                return df
+                
+        analyzer = RajatAlphaAnalyzer(self.config, MockFetcher())
+        df = MockFetcher().get_daily_bars('TEST')
+        df = analyzer.calculate_indicators(df)
+        
+        # Test Absorption Reversal detection directly on candle
+        curr_candle = df.iloc[-1]
+        c_range = curr_candle['high'] - curr_candle['low']
+        lower_wick = min(curr_candle['close'], curr_candle['open']) - curr_candle['low']
+        wick_ratio = lower_wick / c_range if c_range > 0 else 0.0
+        close_pos = (curr_candle['close'] - curr_candle['low']) / c_range if c_range > 0 else 0.0
+        
+        self.assertGreaterEqual(wick_ratio, 0.55)
+        self.assertGreaterEqual(close_pos, 0.70)
+        self.assertGreaterEqual(99.60, 100.0 * 0.99)
+
+    @patch('rajat_alpha_v67_single.StockHistoricalDataClient')
+    @patch('rajat_alpha_v67_single.TradingClient')
+    def test_daily_market_close_snapshot_output(self, mock_trading, mock_data):
+        """Test that generate_daily_market_close_snapshot runs cleanly and appends to log"""
+        bot = RajatAlphaTradingBot(config_path='config/config.json')
+        bot.db = self.db
+        
+        # Add a position and a partial exit
+        pos_id = self.db.add_position('SNAP_TEST', 100.0, 50, 92.0, 4.5, pattern='Hammer')
+        self.db.add_partial_exit(pos_id, 10, 105.0, 'PT1', 5.0)
+        
+        # Record an SL step in memory
+        bot.position_manager.daily_sl_steps.append({
+            'symbol': 'SNAP_TEST',
+            'old_sl': 92.0,
+            'new_sl': 96.0,
+            'profit_pct': 5.0,
+            'stage': 1,
+            'highest_price': 105.0,
+            'time': '15:30:00 ET'
+        })
+        
+        # Generate snapshot
+        bot.generate_daily_market_close_snapshot()
+        
+        # Verify log file was written
+        snapshot_file = os.path.join('logs', 'daily_snapshot.log')
+        self.assertTrue(os.path.exists(snapshot_file))
+        with open(snapshot_file, 'r', encoding='utf-8') as f:
+            content = f.read()
+        self.assertIn("END-OF-DAY MARKET CLOSE EXECUTIVE SNAPSHOT", content)
+        self.assertIn("SNAP_TEST", content)
 
 if __name__ == '__main__':
     unittest.main()

@@ -256,9 +256,19 @@ def evaluate_signal_v32(df: pd.DataFrame, i: int, qqq_df: pd.DataFrame) -> Tuple
     if is_shooting_star(curr):
         return False, {}  # Heavy upper wick rejection
         
-    # Green session check
+    # Gate 6.5: Green session confirmation with Absorption Reversal Exemption
     if len(df_window) >= 2 and curr['Close'] <= df_window.iloc[-2]['Close']:
-        return False, {}  # Red day rejection
+        c_range = curr['High'] - curr['Low']
+        lower_wick = min(curr['Close'], curr['Open']) - curr['Low']
+        wick_ratio = lower_wick / c_range if c_range > 0 else 0.0
+        close_pos = (curr['Close'] - curr['Low']) / c_range if c_range > 0 else 0.0
+        prev_close = df_window.iloc[-2]['Close']
+        within_1pct = curr['Close'] >= (prev_close * 0.99)
+        if wick_ratio >= 0.55 and close_pos >= 0.70 and within_1pct:
+            pat_weight = 0.5
+            pat_found = True
+        else:
+            return False, {}  # Red day rejection
         
     # Calculate IBD RS (0-100) — Informational only
     rs_score = 50.0

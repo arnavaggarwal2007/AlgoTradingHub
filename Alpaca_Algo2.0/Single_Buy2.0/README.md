@@ -68,7 +68,7 @@
 Every candidate symbol must pass through sequential institutional filters in exact priority order:
 
 ### Gate 0: Market Regime Gate
-- Evaluates benchmark indices (`SPY` and `QQQ`). When enabled, halts new buy orders if either index is trading below its 50 SMA. Existing positions continue to be managed normally.
+- Evaluates benchmark indices (`SPY` and `QQQ`). When enabled, halts new buy orders if either index is trading below its configured moving average (`index_ma_period: 50`, `100`, `125`, `150`, or `200`). Evaluated on a 30-minute cache interval to eliminate log clutter. Existing positions continue to be monitored normally.
 
 ### Gate 1 & 1.5: Market Structure & Regime-Adaptive Slope
 - **Structure**: Enforces `50 SMA > 200 SMA`, `Close > 200 SMA`, and `21 EMA >= 50 SMA - 2.5%`.
@@ -98,6 +98,10 @@ Supported candlestick reversal patterns with institutional conviction weightings
 - **Stalling Filter**: Rejects stocks where the 8-day price range is `< 5.0%` (horizontal churn).
 - **Extended Stock**: Rejects candles gapping up `> 4.0%` above prior close.
 
+### Gate 6.5: Green Session Confirmation & Absorption Reversal Exemption
+- **Standard Session**: Requires the stock to close higher than yesterday's close (`Close > Prev_Close`). Green candles retain full pattern conviction (Hammer: 0.8, Engulfing/Piercing: 1.0).
+- **Absorption Reversal Exemption**: If nominally red vs. prior close, candles with deep buyer absorption (`lower_wick / range >= 0.55`, `close_position >= 0.70`, and within 1.0% of prior close) are permitted to pass with **partial conviction (weight: 0.5)**.
+
 ### Informational: IBD-Style Relative Strength Rating (0–100)
 - Calculates 1-year weighted relative performance vs. SPY (40% Q4 + 20% Q3 + 20% Q2 + 20% Q1).
 - Highlighted prominently in console and audit logs (`[AAPL] ℹ️ IBD RS Rating: 84/100`).
@@ -107,7 +111,7 @@ Supported candlestick reversal patterns with institutional conviction weightings
 - Combines pattern/touch (+0.6 to +1.0), weekly MTF (+1.0), demand zone (+1.0), RSI14 > 50 (+1.0), monthly MTF (+1.0), volume > SMA21 (+1.0), and isolated touch state (+0.5 to +1.0) out of 7.0 possible points.
 - **Minimum Threshold**: Configured via `min_signal_score: 4.0`.
 - **Touch-Only Dual Gate**: If no pattern is present and the signal is generated solely by a moving average touch:
-  1. The minimum required conviction score increases from 4.0 to **>= 5.0**.
+  1. The minimum required conviction score is governed by min_touch_only_score (default 4.0, aligned with min_signal_score: 4.0 for TradingView parity, or configurable to 5.0 if an extra point of conviction is desired).
   2. The candle must exhibit a **bullish real body ratio >= 50%** of the range and close in the **upper third (>= 67%)** of the daily range.
 
 ---
@@ -174,6 +178,17 @@ The system is configured via [`config/config.json`](file:///C:/Alpaca_Algo2.0/Si
 | `stage_2_offset_cents` | `float` | `0.02` | Cent offset toward near-touch for faster fills ($0.02) |
 | `stage_3_marketable_limit` | `boolean` | `true` | Convert to marketable limit at timeout to guarantee fill |
 | `market_close_cutoff_time` | `string` | `"15:55"` | Cutoff time (ET) to convert all unfilled orders before close |
+
+### `trading_rules` & Position Sizing
+| Key | Type | Default | Description |
+| :--- | :--- | :--- | :--- |
+| `sizing_mode` | `string` | `"capital_pct"` | `"capital_pct"` (fixed capital %) or `"risk_based"` (equal risk contribution / ΔSL) |
+| `per_trade_pct` | `float` | `0.03` | Percentage of total equity per trade in `capital_pct` mode (3% = $3,000 on $100k account) |
+| `risk_per_trade_pct` | `float` | `0.005` | Target fractional risk in `risk_based` mode (0.5% risk = $500 on $100k account) |
+| `fixed_risk_dollars` | `float` | `500.0` | Fixed dollar risk override per trade (if > 0, risks exactly this amount) |
+| `max_allocation_per_stock_pct` | `float` | `0.06` | Hard capital ceiling per ticker (6% = $6,000 max). Guards tight stops from overleveraging |
+| `max_equity_utilization_pct` | `float` | `0.90` | Maximum portfolio capital utilization (90% of total equity) |
+| `capital_conservation_mode` | `boolean` | `false` | Automatically halves trade allocation when portfolio utilization $\ge 70\%$ of max limit |
 
 ### `candle_quality` & `pullback_validation`
 | Key | Type | Default | Description |

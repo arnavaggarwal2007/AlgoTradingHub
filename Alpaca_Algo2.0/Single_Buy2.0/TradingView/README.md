@@ -63,26 +63,68 @@ Directly mirrors lines 947–988 of `rajat_alpha_v67_single.py`:
 
 ### C. Visual Touch Boxes & Moving Average Interaction
 - Detects pullbacks and touches to the **21 EMA**, **50 SMA**, and **200 SMA**.
-- Draws small visual rectangles/boxes around the touch bars (Cyan for 21 EMA, Gold for 50 SMA, Purple for 200 SMA).
+- Draws compact visual boxes marked **`TCH`** on qualifying candles (Cyan border for 21 EMA, Gold for 50 SMA, Purple for 200 SMA).
+- **Interactive Tooltip**: Hovering over any `TCH` box reveals the exact moving average and touch index (e.g., `EMA 21 Touch #2 of 4`).
 - **Max 4 Touches Enforced**: Per quantitative specification, touch boxes only display for the first 4 touches ($T1 \to T4$) and cease displaying thereafter.
 - **Automatic Trend Reset**: Touch counters automatically reset to zero upon a Golden/Death cross (`50 SMA` crossing `200 SMA`).
 
 ### D. Dynamic Risk & Exit Suite (v3.2)
 - **Hybrid ATR Initial Stop**: $1.5\times$ to $2.5\times$ ATR, bounded between 5% and 17%.
-- **Multi-Stage Stop Stepper (Color-Coded Line)**:
-  - `Stage 0 (Initial)`: Red line (ATR stop)
-  - `Stage 1 (+5% Gain)`: Orange line (tightened to -4% from entry)
-  - `Stage 2 (+8% Gain)`: Yellow line (stepped to Break-Even 0.0%)
-  - `Stage 3 (+10% Gain)`: Green line (locks in +3% profit)
-  - `Stage 4 (+15% Gain)`: Lime line (Runner mode, locks in +10% profit)
+- **Full Stepper Color Palette & Ratchet Mechanics**:
+  - `Stage 0 (Initial)`: **Red line** (ATR stop loss)
+  - `Stage 1 (+5% Gain)`: **Orange line** (tightened to -4% from entry)
+  - `Stage 2 (+8% Gain)`: **Yellow line** (stepped to Break-Even +1.0% above entry, fully configurable)
+  - `Stage 3 (+10% Gain)`: **Parrot Green line (`#76ff03`)** (locks in +3% net profit)
+  - `Stage 4 (+15% Gain / Runner)`: **Vibrant Cyan line (`#00e5ff`)** (locks in +10% base runner profit)
+- **Runner Continuous Ratchet & Max 5% Trailing Gap**:
+  - Once price crosses +15% (Stage 4), the stop loss ratchets dynamically **1:1** for every additional 1% price advance.
+  - When price reaches **Target 4 (+20%)**, the stop loss immediately ratchets to at least Target 4 (+20%).
+  - In Runner Mode, the trailing gap is strictly capped to **never exceed 5%** from the peak high (`high * 0.95`).
 - **4-Tier Scaling Targets**:
   - `Target 1 (+5%)`: Scales out 20% of position
   - `Target 2 (+10%)`: Scales out 25% of position
   - `Target 3 (+15%)`: Scales out 25% of position (leaves 30% runner)
-  - `Target 4 (+20%)`: Final target for runner
+  - `Target 4* (+20%)`: Target 4 runner milestone
 - **Dynamic Structural TES**: 21-day base hold with +10-day extensions when price holds above EMA21 (max 2 extensions).
 - **Catastrophic Circuit Breaker**: Immediate exit if low $\le -22\%$.
 - **Bar-Close Confirmation**: Evaluated on confirmed daily bar closes to avoid intraday wick whipsaws.
+
+### E. Post-Runner Add-On Signals (`B1 (Add)`)
+- When an active position reaches Runner Mode (holding only the remaining 20%–30% runner position), a fresh qualifying swing setup on the stock will trigger and display as **`B1 (Add)`** in high-contrast green.
+- **Independent Tracking**: The new add-on signal does not overwrite or alter the existing runner's entry price, stage, or stop loss.
+
+### F. Custom Configurable Moving Average Overlay
+- Adds a user-customizable moving average line directly to the chart.
+- Configurable MA type: **SMA** or **EMA**.
+- Selectable lookback period: Default **100** or **150** days (customizable from 5 to 500).
+- Configurable color picker (defaults to Vibrant Amber `#ff9800`).
+
+### G. High Volume Surge "V" Marker & Detailed Tooltip
+- Eliminates overlapping bottom ribbons by placing an interactive **`V`** badge directly below high volume expansion candles.
+- **Interactive Tooltip Breakdown**:
+  - Exact volume traded (in Millions or Thousands of shares).
+  - Relative percentage comparison vs. 21-day average volume (e.g. `+65.4%`).
+  - Relative percentage comparison vs. previous day volume (e.g. `+42.1%`).
+- **Dynamic Badge Color**:
+  - Vibrant Cyan (`#00e5ff`) for extreme institutional surges ($\ge 2.0\times$ 21d average).
+  - Parrot Green (`#00e676`) for bullish green volume surges.
+  - Soft Red (`#ff5252`) for bearish high-volume days.
+
+### H. Visual Color Guide (Candlesticks & Badges)
+| Visual Element | Color | Institutional Meaning |
+| :--- | :--- | :--- |
+| **Candle: Parrot Green** | `#00e676` | Bullish Engulfing Reversal Pattern (Tier A) |
+| **Candle: Lime Green** | `#76ff03` | Bullish Piercing Reversal Pattern (Tier A) |
+| **Candle: Cyan / Blue** | `#00b0ff` | Bullish Hammer Reversal Pattern (Tier B) |
+| **Candle: Purple** | `#e040fb` | Tweezer Bottom Reversal Pattern (Tier B) |
+| **Candle: Yellow** | `#ffea00` | Upside Reversal Pattern (Tier C) |
+| **Square: Cyan Box** | `#00e5ff` | EMA 21 Touch Box (`TCH`) |
+| **Square: Gold Box** | `#ffd700` | SMA 50 Touch Box (`TCH`) |
+| **Square: Purple Box** | `#e040fb` | SMA 200 Touch Box (`TCH`) |
+| **Badge: `B1`** | Green / White text | Primary institutional entry |
+| **Badge: `B1 (Add)`** | Green / Black text | Runner mode scale-in signal |
+| **Badge: `↑OPP`** | Yellow / Black text | Discretionary manual opportunity |
+| **Badge: `↓REJ`** | Pink / Black text | Disqualified setup (silenced during active trades) |
 
 ---
 
@@ -111,11 +153,12 @@ Directly mirrors lines 947–988 of `rajat_alpha_v67_single.py`:
 
 ## 🔔 Native Alert Triggers
 
-The Indicator script provides 7 pre-configured alerts:
+The Indicator script provides 8 pre-configured alerts:
 1. `[Rajat Alpha v3.2] Buy Signal (B1)`: High-conviction entry executed.
-2. `[Rajat Alpha v3.2] Discretionary Opportunity (OPP)`: Setup qualified while position active (manual trading).
-3. `[Rajat Alpha v3.2] Trailing Stop Stepped`: SL raised (-4%, Break-Even, +3%, or +10%).
-4. `[Rajat Alpha v3.2] Target 1 Hit (+5%)`: First 20% scale-out.
-5. `[Rajat Alpha v3.2] Target 2 Hit (+10%)`: Second 25% scale-out.
-6. `[Rajat Alpha v3.2] Runner Mode Triggered (+15%)`: Third 25% scale-out, enters runner mode.
-7. `[Rajat Alpha v3.2] Position Closed`: Full exit (SL, TES, or Breaker).
+2. `[Rajat Alpha v3.2] Runner Add-On Signal (B1 Add)`: Secondary swing entry during runner mode.
+3. `[Rajat Alpha v3.2] Discretionary Opportunity (OPP)`: Setup qualified while non-runner position active (manual trading).
+4. `[Rajat Alpha v3.2] Trailing Stop Stepped`: SL raised (-4%, Break-Even+1%, +3%, or +10% runner ratchet).
+5. `[Rajat Alpha v3.2] Target 1 Hit (+5%)`: First 20% scale-out.
+6. `[Rajat Alpha v3.2] Target 2 Hit (+10%)`: Second 25% scale-out.
+7. `[Rajat Alpha v3.2] Runner Mode Triggered (+15%)`: Third 25% scale-out, enters runner mode.
+8. `[Rajat Alpha v3.2] Position Closed`: Full exit (SL, TES, or Breaker).

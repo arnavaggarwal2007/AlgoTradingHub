@@ -112,12 +112,17 @@ All action strings and enum parameters are parsed with **case-insensitive normal
 ---
 
 ### 4.2 Trading Rules & Universe (`trading_rules`)
-- **`portfolio_mode`** (`string`, default: `"watchlist_only"`): Options: `"watchlist_only"` or `"all"`.
+- **`sizing_mode`** (`string`, default: `"capital_pct"`):
+  - `"capital_pct"` (Approach 1): Fixed capital percentage per trade (e.g. 3% = $3,000 on $100k equity).
+  - `"risk_based"` (Approach 2): Institutional Equal Risk Contribution / Volatility Parity ($500 fixed dollar risk / $(Entry - SL)$ distance), bounded by `max_allocation_per_stock_pct`.
+- **`per_trade_pct`** (`float`, default: `0.03`): Percentage of account equity allocated to a single trade when `sizing_mode` is `"capital_pct"` (0.03 = 3% = $3,000 on a $100k account).
+- **`risk_per_trade_pct`** (`float`, default: `0.005`): Fractional risk budget per trade when `sizing_mode` is `"risk_based"` (0.005 = 0.5% risk = $500 on $100k account).
+- **`fixed_risk_dollars`** (`float`, default: `500.0`): Hard dollar risk budget per trade. If $> 0$, overrides `risk_per_trade_pct` to risk exactly this dollar amount.
+- **`max_allocation_per_stock_pct`** (`float`, default: `0.06`): Maximum allowable capital allocation across any single symbol (0.06 = 6% = $6,000 ceiling on a $100k account). Essential institutional guardrail preventing overleveraging on tight-stop setups.
 - **`max_equity_utilization_pct`** (`float`, default: `0.90`): Maximum portfolio exposure (90% of total equity). Blocks new buys if exceeded.
-- **`per_trade_pct`** (`float`, default: `0.03`): Percentage of account equity allocated to a single trade (3% = $3,000 on a $100k account).
-- **`max_allocation_per_stock_pct`** (`float`, default: `0.06`): Maximum allowable allocation across any single symbol (6% = $6,000 max).
-- **`capital_conservation_mode`** (`boolean`, default: `false`): When enabled, if portfolio utilization exceeds 70% of max limit, position size is automatically halved.
-- **`min_touch_only_score`** (`float`, default: `5.0`): Minimum conviction score required to take a trade that has a moving average touch but no candlestick pattern.
+- **`capital_conservation_mode`** (`boolean`, default: `false`): When enabled, if portfolio utilization exceeds 70% of max limit, position size or risk allocation is automatically halved.
+- **`portfolio_mode`** (`string`, default: `"watchlist_only"`): Options: `"watchlist_only"` or `"all"`.
+- **`min_touch_only_score`** (`float`, default: `4.0`): Minimum conviction score required to take a trade that has a moving average touch but no candlestick pattern. Setting this to `4.0` aligns perfectly with the TradingView indicator's default `min_score_req = 4.0` threshold. Set to `5.0` if you wish to enforce an extra point of conviction on touch setups that lack a reversal candle pattern.
 
 ---
 

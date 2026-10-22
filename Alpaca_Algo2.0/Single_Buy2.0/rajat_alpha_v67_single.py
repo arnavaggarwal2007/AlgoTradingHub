@@ -111,14 +111,14 @@ console_formatter = logging.Formatter(
 console_handler.setFormatter(console_formatter)
 logger.addHandler(console_handler)
 
-file_handler = logging.FileHandler('logs/rajat_alpha_v67.log')
+file_handler = logging.FileHandler('logs/rajat_alpha_v67.log', encoding='utf-8')
 json_formatter = ComplianceJSONFormatter(
     '%(timestamp)s %(level)s %(logger)s %(module)s %(function)s %(line)s %(message)s'
 )
 file_handler.setFormatter(json_formatter)
 logger.addHandler(file_handler)
 
-audit_handler = logging.FileHandler('logs/audit.log')
+audit_handler = logging.FileHandler('logs/audit.log', encoding='utf-8')
 audit_handler.setLevel(logging.WARNING)
 audit_handler.setFormatter(json_formatter)
 logger.addHandler(audit_handler)
@@ -161,6 +161,9 @@ class PositionDatabase:
     
     def __init__(self, db_path='db/positions.db'):
         self.db_path = db_path
+        db_dir = os.path.dirname(db_path)
+        if db_dir:
+            os.makedirs(db_dir, exist_ok=True)
         self.conn = sqlite3.connect(db_path, check_same_thread=False)
         self.create_tables()
     
@@ -482,6 +485,15 @@ class ConfigManager:
             return default_val
         return default
 
+    def __getitem__(self, item):
+        return self.config[item]
+
+    def __setitem__(self, key, value):
+        self.config[key] = value
+
+    def __contains__(self, item):
+        return item in self.config
+
 # ================================================================================
 # MARKET DATA FETCHER (With API Resilience & Midpoint Quotes)
 # ================================================================================
@@ -530,9 +542,10 @@ class MarketDataFetcher:
         logic = {'open': 'first', 'high': 'max', 'low': 'min', 'close': 'last', 'volume': 'sum'}
         return df_daily.resample('ME').agg(logic)
     
-    @with_api_retry(max_retries=3, base_delay=0.5)
+    @with_api_retry(max_retries=3, base_delay=1.0)
     def get_current_price(self, symbol: str) -> Optional[float]:
-        """Get latest price with fallback to last valid price"""
+        """Get latest price with retry, quote fallback, and cached price fallback"""
+        # 1. Attempt latest trade bar
         try:
             params = StockLatestBarRequest(symbol_or_symbols=symbol)
             bars = self.data_client.get_stock_latest_bar(params)
@@ -541,11 +554,27 @@ class MarketDataFetcher:
                 self.last_valid_price[symbol] = price
                 return price
         except Exception as e:
-            logger.warning(f"[{symbol}] Failed to fetch latest bar: {e}")
+            logger.warning(f"[{symbol}] Direct bar query encounter: {e}. Attempting midpoint quote fallback...")
+            # Fallback to quote
+            quote = self.get_latest_quote(symbol)
+            if quote and quote.get('mid'):
+                mid = float(quote['mid'])
+                self.last_valid_price[symbol] = mid
+                return mid
+            if symbol in self.last_valid_price:
+                return self.last_valid_price[symbol]
+            raise e
         
+        # 2. Try quote fallback if bar was empty/None
+        quote = self.get_latest_quote(symbol)
+        if quote and quote.get('mid'):
+            mid = float(quote['mid'])
+            self.last_valid_price[symbol] = mid
+            return mid
+            
         return self.last_valid_price.get(symbol)
 
-    @with_api_retry(max_retries=3, base_delay=0.5)
+    @with_api_retry(max_retries=3, base_delay=1.0)
     def get_latest_quote(self, symbol: str) -> Optional[Dict]:
         """Fetch current bid, ask, and midpoint quote for Smart Order Execution Engine"""
         try:
@@ -720,6 +749,10 @@ class RajatAlphaAnalyzer:
             'last_swing_high': 0.0,
             'last_sma50_touch_bar': -999
         })
+        
+        # 30-Minute Market Regime Cache
+        self._regime_cache_time = None
+        self._regime_cache_value = True
     
     def calculate_indicators(self, df: pd.DataFrame) -> pd.DataFrame:
         """Add all technical indicators including ATR14"""
@@ -781,20 +814,42 @@ class RajatAlphaAnalyzer:
                 state['last_sma50_touch_bar'] = len(df) - 1
     
     def check_market_regime(self) -> bool:
-        """Verify broad market regime (SPY & QQQ > 50 SMA)"""
-        if not self.config.get('market_regime', 'enable_index_gate', True):
+        """Verify broad market regime (SPY & QQQ > configured SMA) with 30-minute caching"""
+        enable_gate = self.config.get('market_regime', 'enable_index_gate', True)
+        above_sma_req = self.config.get('market_regime', 'index_above_sma_required',
+                        self.config.get('market_regime', 'index_above_sma50_required', True))
+        if not (enable_gate and above_sma_req):
             return True
             
+        now = datetime.now()
+        if self._regime_cache_time and (now - self._regime_cache_time).total_seconds() < 1800:
+            return self._regime_cache_value
+            
         index_symbols = self.config.get('market_regime', 'index_symbols', ["SPY", "QQQ"])
+        ma_period = int(self.config.get('market_regime', 'index_ma_period', 50))
+        is_bullish = True
+        eval_notes = []
+        # Ensure sufficient calendar days to cover weekends and market holidays
+        calendar_days = max(365, int(ma_period * 1.5) + 60)
         for idx_sym in index_symbols:
-            df_idx = self.data_fetcher.get_daily_bars(idx_sym, days=250)
-            if df_idx is not None and len(df_idx) >= 50:
-                sma50 = ta.sma(df_idx['close'], length=50).iloc[-1]
+            df_idx = self.data_fetcher.get_daily_bars(idx_sym, days=calendar_days)
+            if df_idx is not None and len(df_idx) >= ma_period:
+                sma_val = ta.sma(df_idx['close'], length=ma_period).iloc[-1]
                 last_close = df_idx['close'].iloc[-1]
-                if last_close < sma50:
-                    logger.info(f"Market Regime Gate: {idx_sym} (${last_close:.2f}) < 50 SMA (${sma50:.2f}). Market gate active.")
-                    return False
-        return True
+                eval_notes.append(f"{idx_sym}: ${last_close:.2f} ({ma_period} SMA: ${sma_val:.2f})")
+                if last_close < sma_val:
+                    is_bullish = False
+        
+        self._regime_cache_time = now
+        self._regime_cache_value = is_bullish
+        
+        notes_str = " | ".join(eval_notes) if eval_notes else "Indices checked"
+        if not is_bullish:
+            logger.info(f"[MARKET REGIME] Gate ACTIVE (Defensive Mode): {notes_str}. New buys suspended.")
+        else:
+            logger.info(f"[MARKET REGIME] Market Bullish: {notes_str}. Normal trading enabled.")
+            
+        return is_bullish
 
     def check_ma_slopes(self, symbol: str, df: pd.DataFrame) -> bool:
         """Regime-adaptive moving average slope validation"""
@@ -1075,28 +1130,41 @@ class RajatAlphaAnalyzer:
         self.update_touch_tracking(symbol, df_daily)
         
         # GATE 0: Broad Market Regime Gate
+        ma_period = int(self.config.get('market_regime', 'index_ma_period', 50))
         if not self.check_market_regime():
-            result['reason'] = "Broad market regime not bullish (SPY/QQQ < 50 SMA)"
+            result['reason'] = f"Broad market regime not bullish (SPY/QQQ < {ma_period} SMA)"
+            logger.info(f"[{symbol}] ❌ Gate 0 Market Regime: FAILED (SPY/QQQ < SMA{ma_period})")
             return False, result
+        else:
+            logger.info(f"[{symbol}] ✅ Gate 0 Market Regime: PASSED - Broad market bullish (SPY/QQQ > {ma_period} SMA)")
 
         # GATE 1: Market Structure
         structure_ok = self.check_market_structure(df_daily)
         result['checks']['market_structure'] = structure_ok
         if not structure_ok:
             result['reason'] = "Market structure failed (50 SMA > 200 SMA required)"
+            logger.info(f"[{symbol}] ❌ Gate 1 Market Structure: FAILED (SMA50 <= SMA200)")
             return False, result
+        else:
+            logger.info(f"[{symbol}] ✅ Gate 1 Market Structure: PASSED - Bullish alignment confirmed")
 
         # GATE 1.5: Regime-Adaptive MA Slope
         if not self.check_ma_slopes(symbol, df_daily):
             result['reason'] = "50 SMA slope negative in non-bull regime"
+            logger.info(f"[{symbol}] ❌ Gate 1.5 MA Slope: FAILED (SMA50 downward slope)")
             return False, result
+        else:
+            logger.info(f"[{symbol}] ✅ Gate 1.5 MA Slope: PASSED - Moving average slope verified")
 
         # GATE 2: Preceding Impulse & Orderly Retracement (First criteria: valid pullback)
         pullback_ok = self.check_pullback(df_daily)
         result['checks']['pullback'] = pullback_ok
         if not pullback_ok:
             result['reason'] = "No valid preceding impulse and pullback sequence"
+            logger.info(f"[{symbol}] ❌ Gate 2 Pullback: FAILED (No valid impulse + pullback near MAs)")
             return False, result
+        else:
+            logger.info(f"[{symbol}] ✅ Gate 2 Pullback: PASSED - Valid pullback confirmed with downtrend")
 
         # GATE 3: Candlestick Pattern OR Qualified Touch (Pattern formation after pullback)
         pattern_cfg = self.config.get('pattern_config', {})
@@ -1105,7 +1173,13 @@ class RajatAlphaAnalyzer:
         
         if not (pat_found or touch_found):
             result['reason'] = "No recognized reversal pattern or qualified touch after pullback"
+            logger.info(f"[{symbol}] ❌ Gate 3 Setup Pattern/Touch: FAILED (No qualifying pattern or touch)")
             return False, result
+        else:
+            sig_parts = []
+            if pat_found: sig_parts.append(f"Pattern: {pat_name}")
+            if touch_found: sig_parts.append(f"Touch: {touch_type}")
+            logger.info(f"[{symbol}] ✅ Gate 3 Signal Check: PASSED - {' + '.join(sig_parts)} detected")
 
         result['checks']['pattern'] = pat_found
         result['checks']['touch_signal'] = touch_found
@@ -1117,66 +1191,104 @@ class RajatAlphaAnalyzer:
         result['checks']['monthly_ok'] = monthly_ok
         if not weekly_ok:
             result['reason'] = "Weekly MTF failed (Weekly Close <= Weekly EMA21)"
+            logger.info(f"[{symbol}] ❌ Gate 4 Weekly MTF: FAILED (Weekly Close <= Weekly EMA21)")
             return False, result
+        else:
+            mtf_desc = "Both weekly and monthly aligned" if monthly_ok else "Weekly alignment confirmed"
+            logger.info(f"[{symbol}] ✅ Gate 4 MTF Confirmation: PASSED - {mtf_desc}")
 
         # GATE 5: Demand Zone Proximity Check
         curr_candle = df_daily.iloc[-1]
         low_21 = df_daily['low'].iloc[-21:].min() if len(df_daily) >= 21 else curr_candle['low']
         in_demand_zone = curr_candle['low'] <= (low_21 * 1.035)
         result['checks']['demand_zone'] = in_demand_zone
+        if in_demand_zone:
+            logger.info(f"[{symbol}] ✅ Gate 5 Demand Zone: PASSED - In institutional demand zone (<= 3.5% above 21d low)")
 
         # GATE 6: Stalling Filter
         if self.check_stalling(df_daily):
             result['reason'] = "Stock is in horizontal sideways consolidation"
+            logger.info(f"[{symbol}] ❌ Gate 6 Stalling: FAILED (Horizontal consolidation detected)")
             return False, result
+        else:
+            logger.info(f"[{symbol}] ✅ Gate 6 Stalling Filter: PASSED - No consolidation detected")
 
         # GATE 6.25: Extended Stock Filter (Gap > 4%)
         curr_price = self.data_fetcher.get_current_price(symbol)
         if curr_price is None:
-            result['reason'] = "Unable to fetch live price"
-            return False, result
+            curr_price = float(df_daily.iloc[-1]['close'])
             
         if self.config.get('strategy_params', 'enable_extended_filter', True):
             is_ext, gap_pct = self.check_extended_stock(df_daily, curr_price)
             if is_ext:
                 result['reason'] = f"Stock is EXTENDED (Gap up {gap_pct*100:.2f}%)"
+                logger.info(f"[{symbol}] ❌ Gate 6.25 Extended: FAILED (Gap up {gap_pct*100:.2f}%)")
                 return False, result
+            else:
+                logger.info(f"[{symbol}] ✅ Gate 6.25 Extended Filter: PASSED - Gap within allowed threshold ({gap_pct*100:.2f}%)")
 
-        # GATE 6.5: Green Session Confirmation
+        # GATE 6.5: Green Session Confirmation with Absorption Reversal Exemption
         prev_close = df_daily.iloc[-2]['close']
         if curr_price <= prev_close:
-            result['reason'] = f"Stock is RED today (${curr_price:.2f} <= ${prev_close:.2f})"
-            return False, result
+            c_range = curr_candle['high'] - curr_candle['low']
+            lower_wick = min(curr_candle['close'], curr_candle['open']) - curr_candle['low']
+            wick_ratio = lower_wick / c_range if c_range > 0 else 0.0
+            close_pos = (curr_candle['close'] - curr_candle['low']) / c_range if c_range > 0 else 0.0
+            within_1pct = curr_price >= (prev_close * 0.99)
+            
+            # Buyer absorption reversal: long lower wick >= 55% of range, closes in upper 30% of range (close_pos >= 0.70), within 1% of prev close
+            is_absorption = (wick_ratio >= 0.55 and close_pos >= 0.70 and within_1pct)
+            
+            if is_absorption:
+                logger.info(f"[{symbol}] 🛡️ Gate 6.5 Absorption Reversal Active: Session slightly red (${curr_price:.2f} <= ${prev_close:.2f}), "
+                            f"but buyer absorption verified (Lower wick: {wick_ratio*100:.1f}%, Close pos: {close_pos*100:.1f}%). "
+                            f"Passing with partial conviction (weight=0.5).")
+                pat_weight = 0.5
+                if not pat_found:
+                    pat_found = True
+                    result['candle_pattern'] = 'Absorption Hammer'
+                else:
+                    result['candle_pattern'] = f"{result['candle_pattern']} (Absorption)"
+            else:
+                result['reason'] = f"Stock is RED today (${curr_price:.2f} <= ${prev_close:.2f})"
+                logger.info(f"[{symbol}] ❌ Gate 6.5 Green Candle: FAILED (RED today: ${curr_price:.2f} <= ${prev_close:.2f})")
+                return False, result
+        else:
+            logger.info(f"[{symbol}] ✅ Gate 6.5 GREEN CANDLE FILTER: PASSED - Green today (${curr_price:.2f} > ${prev_close:.2f})")
 
         # GATE 6.75: Shooting Star Rejection Filter (MANDATORY)
         max_wick = self.config.get('candle_quality', 'max_upper_wick_ratio', 0.50)
         max_w2b = self.config.get('candle_quality', 'max_wick_to_body_ratio', 2.0)
         if PatternDetector.is_shooting_star(curr_candle, max_wick, max_w2b):
             result['reason'] = "Shooting star rejection: Upper wick indicates heavy seller distribution"
-            logger.info(f"[{symbol}] ❌ SHOOTING STAR REJECTED: Upper shadow spans >50% of range.")
+            logger.info(f"[{symbol}] ❌ Gate 6.75 Shooting Star: FAILED (Upper shadow spans >50% of range)")
             return False, result
+        else:
+            logger.info(f"[{symbol}] ✅ Gate 6.75 Shooting Star Filter: PASSED - No excessive upper wick rejection")
 
         # Compute IBD Relative Strength Composite (0-100) — Informational & Tie-Breaker
         rs_score = self.calculate_rs_composite(symbol, df_daily)
         result['rs_score'] = rs_score
-        logger.info(f"[{symbol}] ℹ️ IBD RS Rating: {rs_score:.1f}/100 (Informational)")
 
         # Optional Hard RS cutoff if explicitly configured
         if self.config.get('relative_strength', 'enable', False):
             min_rs = self.config.get('relative_strength', 'min_rs_rating', 40.0)
             if rs_score < min_rs:
                 result['reason'] = f"Relative Strength rating too low: {rs_score:.1f} < {min_rs}"
+                logger.info(f"[{symbol}] ❌ RS Rating Filter: FAILED ({rs_score:.1f} < {min_rs})")
                 return False, result
 
         # GATE 7: Scoring & Touch-Only Dual Gate
         score = self.calculate_score(df_daily, symbol, weekly_ok, monthly_ok, pat_found, touch_found, pat_weight, rs_score, in_demand_zone=in_demand_zone)
         result['score'] = score
+        min_score = self.config.get('strategy_params', 'min_signal_score', 4.0)
         
         # Touch-Only Dual Gate: If no pattern, require higher score bar + bullish body
         if not pat_found and touch_found:
-            min_touch_score = self.config.get('trading_rules', 'min_touch_only_score', 5.0)
+            min_touch_score = self.config.get('trading_rules', 'min_touch_only_score', min_score)
             if score < min_touch_score:
                 result['reason'] = f"Touch-only score {score:.1f} below required {min_touch_score}"
+                logger.info(f"[{symbol}] ❌ Gate 7 Touch Score: FAILED ({score:.1f} < {min_touch_score})")
                 return False, result
                 
             body_size = abs(curr_candle['close'] - curr_candle['open'])
@@ -1186,12 +1298,15 @@ class RajatAlphaAnalyzer:
             
             if body_ratio < 0.50 or close_pos < 0.67:
                 result['reason'] = "Touch-only candle failed bullish conviction confirmation"
+                logger.info(f"[{symbol}] ❌ Gate 7 Touch Conviction: FAILED (Weak candle body or close position)")
                 return False, result
 
-        min_score = self.config.get('strategy_params', 'min_signal_score', 4.0)
         if score < min_score:
             result['reason'] = f"Score {score:.1f} below minimum {min_score}"
+            logger.info(f"[{symbol}] ❌ Gate 7 Minimum Score: FAILED (Score {score:.1f} < {min_score})")
             return False, result
+        else:
+            logger.info(f"[{symbol}] ✅ Gate 7 Score Check: PASSED - Score {score:.1f}/7.0 meets minimum {min_score} (RS: {rs_score:.1f})")
 
         # Valid Signal
         signal_types = []
@@ -1220,14 +1335,32 @@ class PositionManager:
         self.config = config
         self.db = db
         self.data_fetcher = data_fetcher
+        self.daily_sl_steps = []
+        self.daily_buys = []
+        self.daily_exits = []
 
-    def calculate_position_size(self, symbol: str, current_price: float) -> Tuple[int, float]:
+    def calculate_position_size(self, symbol: str, current_price: float, stop_loss: Optional[float] = None) -> Tuple[int, float]:
         """
-        Calculates position sizing:
-        - 3% per trade (configurable)
-        - Max 6% per stock (configurable)
-        - Enforces max_equity_utilization_pct (e.g. 90%)
-        - Capital conservation mode if utilization > 70% of max
+        Calculates position sizing according to configured sizing_mode:
+        
+        1. 'capital_pct' (Default / Institutional Baseline):
+           - Sized by percent of account equity per trade (e.g. 3.0%)
+           - trade_amount = equity * per_trade_pct
+           - shares = trade_amount / current_price
+           
+        2. 'risk_based' (Equal Risk Contribution / Volatility Parity):
+           - Sized by target dollar risk per trade divided by distance to Stop Loss
+           - dollar_risk = fixed_risk_dollars if > 0 else (equity * risk_per_trade_pct)
+           - delta_sl = current_price - stop_loss
+           - shares = int(dollar_risk / delta_sl)
+           
+        Institutional Guardrails Enforced Across Both Modes:
+        - Max per-stock allocation cap (e.g. max 6% of equity in any single ticker)
+        - Remaining stock headroom deduction if ticker already held
+        - Portfolio max equity utilization limit (e.g. 90%)
+        - Capital conservation mode (halves sizing if portfolio utilization >= 70% of max limit)
+        - Division-by-zero / minimum delta SL protection (floored at min_initial_sl_pct)
+        - Minimum shares sanity checks (returns 0 if cannot afford 1 share)
         """
         try:
             account = self.trading_client.get_account()
@@ -1236,49 +1369,109 @@ class PositionManager:
             logger.error(f"Failed to get account equity: {e}")
             return 0, 0.0
 
-        trade_pct = self.config.get('trading_rules', 'per_trade_pct', 0.03)
-        max_allocation_per_stock_pct = self.config.get('trading_rules', 'max_allocation_per_stock_pct', 0.06)
+        if equity <= 0 or current_price <= 0:
+            logger.warning(f"[{symbol}] Invalid equity (${equity}) or current price (${current_price})")
+            return 0, 0.0
 
-        # Calculate current allocation for this stock
+        sizing_mode = str(self.config.get('trading_rules', 'sizing_mode', 'capital_pct')).lower()
+        max_allocation_per_stock_pct = float(self.config.get('trading_rules', 'max_allocation_per_stock_pct', 0.06))
+        max_utilization_pct = float(self.config.get('trading_rules', 'max_equity_utilization_pct', 0.90))
+
+        # 1. Calculate current allocation for this stock
         open_positions = self.db.get_open_positions(symbol=symbol)
         current_allocation = sum(pos['entry_price'] * pos['remaining_qty'] for pos in open_positions)
-        current_allocation_pct = current_allocation / equity if equity > 0 else 0
+        current_allocation_pct = current_allocation / equity if equity > 0 else 0.0
 
-        # Remaining allocation for this stock
-        remaining_pct = max(0.0, max_allocation_per_stock_pct - current_allocation_pct)
-        effective_trade_pct = min(trade_pct, remaining_pct)
-
-        if effective_trade_pct <= 0:
+        # Remaining allocation headroom for this stock in dollars and percentage
+        max_stock_capital_allowed = round(max(0.0, (equity * max_allocation_per_stock_pct) - current_allocation), 2)
+        remaining_pct = max_stock_capital_allowed / equity if equity > 0 else 0.0
+        if max_stock_capital_allowed < current_price:
             logger.warning(f"[{symbol}] Per-stock allocation limit reached ({current_allocation_pct*100:.1f}% / {max_allocation_per_stock_pct*100:.1f}%), cannot add more")
             return 0, 0.0
 
-        # Total portfolio allocation
+        # 2. Portfolio-level total allocation & utilization
         total_open = self.db.get_open_positions()
         total_current_allocation = sum(pos['entry_price'] * pos['remaining_qty'] for pos in total_open)
-        max_utilization_pct = self.config.get('trading_rules', 'max_equity_utilization_pct', 0.90)
+        available_portfolio_capital = round(max(0.0, (equity * max_utilization_pct) - total_current_allocation), 2)
 
-        # Capital conservation mode check (if enabled and utilization >= 70% of max limit)
-        if self.config.get('trading_rules', 'capital_conservation_mode', False):
-            if (total_current_allocation / equity) >= (max_utilization_pct * 0.70):
-                effective_trade_pct = effective_trade_pct * 0.5  # Half position size in conservation mode
-
-        trade_amount = equity * effective_trade_pct
-        projected_utilization_pct = (total_current_allocation + trade_amount) / equity
-
-        if projected_utilization_pct > max_utilization_pct:
-            available_pct = max_utilization_pct - (total_current_allocation / equity)
-            if available_pct <= 0.001:
-                logger.warning(f"[{symbol}] Overall utilization limit reached ({projected_utilization_pct*100:.1f}% / {max_utilization_pct*100:.1f}%), blocking trade")
-                return 0, 0.0
-            trade_amount = equity * min(effective_trade_pct, available_pct)
-
-        shares = int(trade_amount / current_price)
-        actual_amount = shares * current_price
-        if shares <= 0:
-            logger.warning(f"[{symbol}] Trade size too small after limits")
+        if available_portfolio_capital < current_price:
+            logger.warning(f"[{symbol}] Overall utilization limit reached ({total_current_allocation/equity*100:.1f}% / {max_utilization_pct*100:.1f}%), blocking trade")
             return 0, 0.0
 
-        return shares, actual_amount
+        # 3. Sizing logic based on configured mode
+        if sizing_mode == 'risk_based':
+            # Target dollar risk: either fixed dollar amount (e.g. $500) or equity percentage (e.g. 0.5%)
+            fixed_dollars = float(self.config.get('trading_rules', 'fixed_risk_dollars', 0.0))
+            risk_pct = float(self.config.get('trading_rules', 'risk_per_trade_pct', 0.005))
+            dollar_risk = fixed_dollars if fixed_dollars > 0 else (equity * risk_pct)
+
+            # Determine risk distance per share (delta_sl = current_price - stop_loss)
+            min_sl_pct = float(self.config.get('risk_management', 'min_initial_sl_pct', 0.05))
+            if stop_loss is None or stop_loss >= current_price or (current_price - stop_loss) <= 0:
+                delta_sl = current_price * min_sl_pct
+                logger.info(f"[{symbol}] Stop loss not provided or invalid (${stop_loss}); using {min_sl_pct*100:.1f}% risk distance (${delta_sl:.2f})")
+            else:
+                delta_sl = current_price - stop_loss
+
+            # Ensure minimum delta_sl floor to prevent division by near-zero
+            min_floor_dist = max(0.10, current_price * 0.005)
+            delta_sl = max(delta_sl, min_floor_dist)
+
+            raw_shares = int(dollar_risk / delta_sl)
+            trade_amount = raw_shares * current_price
+
+            # Capital conservation mode check (halves size if utilization >= 70% of max limit)
+            if self.config.get('trading_rules', 'capital_conservation_mode', False):
+                if (total_current_allocation / equity) >= (max_utilization_pct * 0.70):
+                    trade_amount = trade_amount * 0.5
+                    logger.info(f"[{symbol}] Capital conservation mode active: Risk-based trade allocation halved")
+
+            # Apply stock allocation ceiling (cannot exceed remaining per-stock limit)
+            if trade_amount > max_stock_capital_allowed:
+                trade_amount = max_stock_capital_allowed
+
+            # Apply portfolio headroom ceiling
+            if trade_amount > available_portfolio_capital:
+                trade_amount = available_portfolio_capital
+
+            shares = int((trade_amount + 1e-4) / current_price)
+            actual_amount = shares * current_price
+
+            if shares <= 0:
+                logger.warning(f"[{symbol}] Risk-based shares resulted in 0 after applying caps")
+                return 0, 0.0
+
+            logger.info(f"[{symbol}] Position Sizing [RISK-BASED]: Target Risk=${dollar_risk:.2f}, SL Dist=${delta_sl:.2f} ({(delta_sl/current_price)*100:.1f}%), Raw Shares={raw_shares} -> Final Shares={shares} (${actual_amount:.2f}, {actual_amount/equity*100:.1f}% equity)")
+            return shares, actual_amount
+
+        else:
+            # Standard Capital % Allocation (Default 3% per trade)
+            trade_pct = float(self.config.get('trading_rules', 'per_trade_pct', 0.03))
+            effective_trade_pct = min(trade_pct, remaining_pct)
+
+            # Capital conservation mode check
+            if self.config.get('trading_rules', 'capital_conservation_mode', False):
+                if (total_current_allocation / equity) >= (max_utilization_pct * 0.70):
+                    effective_trade_pct = effective_trade_pct * 0.5
+
+            trade_amount = equity * effective_trade_pct
+            projected_utilization_pct = (total_current_allocation + trade_amount) / equity
+
+            if projected_utilization_pct > max_utilization_pct:
+                available_pct = max_utilization_pct - (total_current_allocation / equity)
+                if available_pct <= 0.001:
+                    logger.warning(f"[{symbol}] Overall utilization limit reached ({projected_utilization_pct*100:.1f}% / {max_utilization_pct*100:.1f}%), blocking trade")
+                    return 0, 0.0
+                trade_amount = equity * min(effective_trade_pct, available_pct)
+
+            shares = int((trade_amount + 1e-4) / current_price)
+            actual_amount = shares * current_price
+            if shares <= 0:
+                logger.warning(f"[{symbol}] Trade size too small after limits")
+                return 0, 0.0
+
+            logger.info(f"[{symbol}] Position Sizing [CAPITAL %]: Allocation={effective_trade_pct*100:.1f}%, Shares={shares} (${actual_amount:.2f})")
+            return shares, actual_amount
 
     def calculate_stop_loss(self, symbol: str, entry_price: float, score: float, df: Optional[pd.DataFrame] = None) -> float:
         """
@@ -1313,12 +1506,16 @@ class PositionManager:
         or Market Order depending on configuration
         """
         current_price = signal_details['price']
-        shares, target_val = self.calculate_position_size(symbol, current_price)
         score = signal_details.get('score', 4.0)
         
         df_daily = self.data_fetcher.get_daily_bars(symbol, days=50)
         stop_loss = self.calculate_stop_loss(symbol, current_price, score, df_daily)
+        shares, target_val = self.calculate_position_size(symbol, current_price, stop_loss)
         
+        if shares <= 0:
+            logger.warning(f"[{symbol}] Calculated position size is 0 shares, aborting buy execution")
+            return False
+            
         use_smart_soee = self.config.get('execution_schedule', 'enable_smart_execution', True)
         quote = self.data_fetcher.get_latest_quote(symbol) if use_smart_soee else None
         
@@ -1354,6 +1551,16 @@ class PositionManager:
                 initial_stop_loss=stop_loss,
                 rs_score=signal_details.get('rs_score', 50.0)
             )
+            self.daily_buys.append({
+                'symbol': symbol,
+                'price': current_price,
+                'shares': shares,
+                'stop_loss': stop_loss,
+                'pattern': signal_details.get('pattern', 'Unknown'),
+                'score': score,
+                'rs_score': signal_details.get('rs_score', 50.0),
+                'time': datetime.now().strftime('%H:%M:%S ET')
+            })
             logger.info(f"[{symbol}] Position established in DB (ID: {position_id}, SL: ${stop_loss:.2f})")
             return True
         except Exception as e:
@@ -1434,9 +1641,21 @@ class PositionManager:
                 target_sl = entry_price - (risk_d * 0.25)
                 new_stage = 1
 
-        if target_sl > current_sl:
+        if target_sl > (current_sl + 0.005):
             self.db.update_stop_loss_stepper(position_id, round(target_sl, 4), round(highest_price, 4), new_stage)
-            logger.info(f"[{position['symbol']}] Trailing SL stepped: ${current_sl:.2f} → ${target_sl:.2f} (Profit: {profit_pct*100:+.2f}%, Stage {new_stage})")
+            position['stop_loss'] = round(target_sl, 4)
+            position['sl_stage'] = new_stage
+            position['highest_price_seen'] = round(highest_price, 4)
+            self.daily_sl_steps.append({
+                'symbol': position['symbol'],
+                'old_sl': current_sl,
+                'new_sl': target_sl,
+                'profit_pct': profit_pct * 100,
+                'stage': new_stage,
+                'highest_price': highest_price,
+                'time': datetime.now().strftime('%H:%M:%S ET')
+            })
+            logger.info(f"[{position['symbol']}] Trailing SL stepped: ${current_sl:.2f} -> ${target_sl:.2f} (Profit: {profit_pct*100:+.2f}%, Stage {new_stage})")
 
     def check_stop_loss(self, position: Dict, current_price: float, 
                         is_closing_window: bool = False, 
@@ -1507,23 +1726,48 @@ class PositionManager:
         return exits_to_execute
 
     def execute_partial_exit(self, position: Dict, target_name: str, quantity: int, current_price: float):
-        """Execute partial exit and activate runner mode if PT3 reached"""
+        """Execute partial exit using SOEE midpoint limit order and activate runner mode if PT3 reached"""
         symbol = position['symbol']
         if quantity > position['remaining_qty'] or quantity <= 0:
             return
             
         logger.info(f"[{symbol}] Executing Partial Exit {target_name}: {quantity} shares @ ${current_price:.2f}")
         try:
-            order_request = MarketOrderRequest(
-                symbol=symbol,
-                qty=quantity,
-                side=OrderSide.SELL,
-                time_in_force=TimeInForce.DAY
-            )
+            use_smart_soee = self.config.get('execution_schedule', 'enable_smart_execution', True)
+            quote = self.data_fetcher.get_latest_quote(symbol) if use_smart_soee else None
+            
+            if quote and quote['mid'] > 0:
+                limit_px = quote['mid']
+                order_request = LimitOrderRequest(
+                    symbol=symbol,
+                    qty=quantity,
+                    limit_price=limit_px,
+                    side=OrderSide.SELL,
+                    time_in_force=TimeInForce.DAY
+                )
+                logger.info(f"[{symbol}] SOEE Midpoint Limit Sell submitted: {quantity} shares @ ${limit_px:.2f} (Spread: ${quote['spread']:.2f})")
+            else:
+                order_request = MarketOrderRequest(
+                    symbol=symbol,
+                    qty=quantity,
+                    side=OrderSide.SELL,
+                    time_in_force=TimeInForce.DAY
+                )
+                logger.info(f"[{symbol}] Market Sell submitted: {quantity} shares @ ~${current_price:.2f}")
+
             self.trading_client.submit_order(order_request)
             
             profit_pct = (current_price - position['entry_price']) / position['entry_price'] * 100
             self.db.add_partial_exit(position['id'], quantity, current_price, target_name, profit_pct)
+            self.daily_exits.append({
+                'symbol': symbol,
+                'exit_type': f'Partial {target_name}',
+                'qty': quantity,
+                'exit_price': current_price,
+                'profit_pct': profit_pct,
+                'reason': f'Profit Target {target_name}',
+                'time': datetime.now().strftime('%H:%M:%S ET')
+            })
             
             # Check if Target 3 executed -> Activate Runner Mode
             if target_name == 'PT3':
@@ -1547,15 +1791,42 @@ class PositionManager:
             
         logger.info(f"[{symbol}] Executing FULL EXIT: {remaining} shares @ ${current_price:.2f} (Reason: {reason})")
         try:
-            order_request = MarketOrderRequest(
-                symbol=symbol,
-                qty=remaining,
-                side=OrderSide.SELL,
-                time_in_force=TimeInForce.DAY
-            )
+            use_smart_soee = self.config.get('execution_schedule', 'enable_smart_execution', True)
+            is_emergency = reason in ['Stop Loss', 'Catastrophic Breaker']
+            quote = self.data_fetcher.get_latest_quote(symbol) if (use_smart_soee and not is_emergency) else None
+            
+            if quote and quote['mid'] > 0:
+                limit_px = quote['mid']
+                order_request = LimitOrderRequest(
+                    symbol=symbol,
+                    qty=remaining,
+                    limit_price=limit_px,
+                    side=OrderSide.SELL,
+                    time_in_force=TimeInForce.DAY
+                )
+                logger.info(f"[{symbol}] SOEE Midpoint Limit Full Exit submitted: {remaining} shares @ ${limit_px:.2f} (Spread: ${quote['spread']:.2f})")
+            else:
+                order_request = MarketOrderRequest(
+                    symbol=symbol,
+                    qty=remaining,
+                    side=OrderSide.SELL,
+                    time_in_force=TimeInForce.DAY
+                )
+                order_desc = "Emergency Market Sell" if is_emergency else "Market Sell"
+                logger.info(f"[{symbol}] {order_desc} submitted: {remaining} shares @ ~${current_price:.2f}")
+
             self.trading_client.submit_order(order_request)
             self.db.close_position(position['id'], current_price, reason)
             profit_pct = (current_price - position['entry_price']) / position['entry_price'] * 100
+            self.daily_exits.append({
+                'symbol': symbol,
+                'exit_type': 'Full Exit',
+                'qty': remaining,
+                'exit_price': current_price,
+                'profit_pct': profit_pct,
+                'reason': reason,
+                'time': datetime.now().strftime('%H:%M:%S ET')
+            })
             logger.info(f"[{symbol}] Position CLOSED in DB (P/L: {profit_pct:+.2f}%)")
         except Exception as e:
             logger.error(f"[{symbol}] Full exit failed: {e}")
@@ -1625,6 +1896,14 @@ class SignalQueue:
         elapsed = (datetime.now() - self.window_start_time).total_seconds() / 60
         return elapsed >= self.monitoring_minutes
     
+    def get_queue_status(self) -> Dict:
+        elapsed = (datetime.now() - self.window_start_time).total_seconds() / 60 if self.window_start_time else 0.0
+        return {
+            'signals_queued': len(self.signals),
+            'minutes_elapsed': elapsed,
+            'symbols': list(self.signals.keys())
+        }
+    
     def get_top_signals(self, analyzer: RajatAlphaAnalyzer) -> List[Tuple[str, Dict]]:
         valid_signals = []
         for symbol, details in self.signals.items():
@@ -1668,6 +1947,10 @@ class RajatAlphaTradingBot:
             top_n=self.config.get('execution_schedule', 'top_n_trades', 5)
         )
         
+        self.last_portfolio_table_time = 0.0
+        self.portfolio_table_interval_seconds = 600  # 10 minutes
+        self.daily_snapshot_done = False
+        
         logger.info("=" * 80)
         logger.info("RAJAT ALPHA V67 TRADING BOT INITIALIZED (VERSION 3.2)")
         logger.info(f"Mode: {'PAPER TRADING' if self.is_paper else 'LIVE TRADING'}")
@@ -1689,13 +1972,20 @@ class RajatAlphaTradingBot:
         return (now.hour == 9 and now.minute >= 30) or (now.hour == 10 and now.minute < 30)
 
     def is_market_opening_down(self) -> bool:
-        """Check if SPY opened below yesterday's close"""
-        df_spy = self.data_fetcher.get_daily_bars('SPY', days=5)
-        if df_spy is not None and len(df_spy) >= 2:
-            prev_close = df_spy['close'].iloc[-2]
-            curr_price = self.data_fetcher.get_current_price('SPY')
-            if curr_price and curr_price < prev_close:
-                return True
+        """Check if SPY opened below yesterday's close with robust multi-layer fallback"""
+        try:
+            df_spy = self.data_fetcher.get_daily_bars('SPY', days=5)
+            if df_spy is not None and len(df_spy) >= 2:
+                prev_close = float(df_spy['close'].iloc[-2])
+                curr_price = self.data_fetcher.get_current_price('SPY')
+                if curr_price is None:
+                    # Fallback to the latest available close in df_spy
+                    curr_price = float(df_spy['close'].iloc[-1])
+                is_down = curr_price < prev_close
+                logger.info(f"[FIRST-HOUR GUARD] SPY Price: ${curr_price:.2f} vs Prev Close: ${prev_close:.2f} -> Market Open Down: {is_down}")
+                return is_down
+        except Exception as e:
+            logger.warning(f"[FIRST-HOUR GUARD] Failed to evaluate SPY open direction: {e}. Defaulting to False (Normal stops).")
         return False
 
     def is_buy_window(self) -> bool:
@@ -1810,24 +2100,51 @@ class RajatAlphaTradingBot:
     def run_sell_guardian(self):
         """Monitors open positions for stop-loss, profit-taking, and structural TES"""
         open_positions = self.db.get_open_positions()
-        if not open_positions: return
+        et_now = datetime.now(pytz.timezone('US/Eastern')).strftime('%H:%M:%S ET')
+        
+        if not open_positions:
+            logger.info(f"🛡️ SELL GUARDIAN: No open positions to monitor ({et_now}).")
+            return
         
         is_first_hour = self.is_first_hour()
         market_down = self.is_market_opening_down() if is_first_hour else False
         suppress_first_hour = is_first_hour and market_down and self.config.get('first_hour_guard', 'suppress_sl', True)
         is_closing = self.is_closing_window()
         
+        if is_first_hour:
+            guard_status = "⚠️ ENGAGED (Regular Stops Suppressed)" if suppress_first_hour else "✅ NORMAL (Index Up / Catastrophic Active)"
+            logger.info(f"[FIRST-HOUR GUARD] 09:30-10:30 ET Status: {guard_status}")
+            
+        pos_summaries = []
         for position in open_positions:
             symbol = position['symbol']
             curr_price = self.data_fetcher.get_current_price(symbol)
-            if curr_price is None: continue
+            if curr_price is None:
+                logger.warning(f"[{symbol}] Could not fetch current price, skipping cycle check.")
+                continue
+            
+            profit_pct = (curr_price - position['entry_price']) / position['entry_price'] * 100.0
+            stage_str = f"Stage {position.get('sl_stage', 0)}" + (" [RUNNER]" if position.get('is_runner') else "")
+            peak_price = max(position.get('highest_price_seen') or curr_price, curr_price)
+            
+            pos_summaries.append({
+                'symbol': symbol,
+                'entry': position['entry_price'],
+                'curr': curr_price,
+                'qty': position['remaining_qty'],
+                'pl_pct': profit_pct,
+                'sl': position['stop_loss'],
+                'stage': stage_str,
+                'peak': peak_price,
+                'is_runner': position.get('is_runner', 0)
+            })
             
             # 1. Update Trailing Stop Stepper
             self.position_manager.update_trailing_stop_loss(position, current_price=curr_price)
             
             # 2. Check Stop Loss (Respects Closing-Basis & First-Hour Guard)
             if self.position_manager.check_stop_loss(position, curr_price, is_closing_window=is_closing, is_first_hour_suppressed=suppress_first_hour):
-                logger.warning(f"[{symbol}] STOP LOSS TRIGGERED at ${curr_price:.2f}")
+                logger.warning(f"[{symbol}] 🚨 STOP LOSS TRIGGERED at ${curr_price:.2f}")
                 self.position_manager.execute_full_exit(position, curr_price, "Stop Loss")
                 continue
                 
@@ -1839,16 +2156,58 @@ class RajatAlphaTradingBot:
             # 4. Check Dynamic Structural TES
             df_sym = self.data_fetcher.get_daily_bars(symbol, days=40)
             if not suppress_first_hour and self.position_manager.check_time_exit(position, df_sym):
-                logger.warning(f"[{symbol}] TIME EXIT SIGNAL (TES) triggered")
+                logger.warning(f"[{symbol}] ⏰ TIME EXIT SIGNAL (TES) triggered")
                 self.position_manager.execute_full_exit(position, curr_price, "TES")
                 continue
+                
+        # Structured Logging: Full Portfolio Table every 10-15 minutes; clean 1-line Heartbeat otherwise
+        now_ts = time.time()
+        show_table = (now_ts - self.last_portfolio_table_time) >= self.portfolio_table_interval_seconds
+        
+        if show_table and pos_summaries:
+            self.last_portfolio_table_time = now_ts
+            table_lines = [
+                "=" * 98,
+                f"🛡️ PORTFOLIO HEALTH MONITOR ({len(pos_summaries)} Active Positions | {et_now})",
+                "-" * 98,
+                f"{'Symbol':<7} | {'Buy Rate':>9} | {'Curr Price':>10} | {'Qty':>5} | {'P/L (%)':>8} | {'Stop Loss':>10} | {'Stage':>10} | {'Peak':>9} | {'Runner'}",
+                "-" * 98
+            ]
+            tot_cost = sum(p['entry'] * p['qty'] for p in pos_summaries)
+            tot_val = sum(p['curr'] * p['qty'] for p in pos_summaries)
+            tot_pl = tot_val - tot_cost
+            tot_pl_pct = (tot_pl / tot_cost * 100.0) if tot_cost > 0 else 0.0
+            
+            for p in sorted(pos_summaries, key=lambda x: x['pl_pct'], reverse=True):
+                runner_tag = "YES" if p['is_runner'] else "NO"
+                table_lines.append(
+                    f"{p['symbol']:<7} | ${p['entry']:>8.2f} | ${p['curr']:>9.2f} | {p['qty']:>5} | {p['pl_pct']:>+7.2f}% | ${p['sl']:>9.2f} | {p['stage']:>10} | ${p['peak']:>8.2f} | {runner_tag:^6}"
+                )
+            table_lines.append("-" * 98)
+            table_lines.append(f"Portfolio Value: ${tot_val:,.2f} | Cost Basis: ${tot_cost:,.2f} | Total Unrealized P/L: ${tot_pl:+,.2f} ({tot_pl_pct:+.2f}%)")
+            table_lines.append("=" * 98)
+            logger.info("\n" + "\n".join(table_lines))
+        elif pos_summaries:
+            top_pos = max(pos_summaries, key=lambda x: x['pl_pct'])
+            avg_pl = sum(x['pl_pct'] for x in pos_summaries) / len(pos_summaries)
+            logger.info(f"💓 [PORTFOLIO HEARTBEAT] {len(pos_summaries)} positions monitored | Top Mover: {top_pos['symbol']} ({top_pos['pl_pct']:+.2f}%) | Avg P/L: {avg_pl:+.2f}% | All stops healthy ({et_now})")
 
     def run_buy_hunter(self):
         """Scans watchlist during buy window and manages signal queue"""
-        if not self.is_buy_window(): return
+        now_et = datetime.now(pytz.timezone('US/Eastern'))
+        start_str = self.config.get('execution_schedule', 'buy_window_start_time', '14:30')
+        end_str = self.config.get('execution_schedule', 'buy_window_end_time', '15:59')
+        
+        if not self.is_buy_window():
+            logger.info(f"⏳ BUY HUNTER: Outside Buy Window ({start_str} - {end_str} ET | Current: {now_et.strftime('%H:%M:%S ET')})")
+            return
         
         is_closing = self.is_closing_window()
         if self.signal_queue.is_window_complete(force_cutoff=is_closing):
+            logger.info("=" * 80)
+            logger.info("🎯 BUY HUNTER: 30-Minute Monitoring Window Complete - Executing Ranked Signals")
+            logger.info("=" * 80)
+            
             top_signals = self.signal_queue.get_top_signals(self.analyzer)
             open_positions = self.db.get_open_positions()
             max_positions = self.config.get('trading_rules', 'max_open_positions', 15)
@@ -1860,8 +2219,6 @@ class RajatAlphaTradingBot:
             daily_remaining = max(0, max_trades_per_day - trades_today)
             avail = min(pos_avail, daily_remaining)
             
-            logger.info("=" * 80)
-            logger.info("🎯 BUY HUNTER EVALUATION & PORTFOLIO ALLOCATION")
             logger.info(f"Daily Trades Executed: {trades_today}/{max_trades_per_day} | Open Positions: {len(open_positions)}/{max_positions} | Available Slots: {avail}")
             
             if top_signals:
@@ -1872,7 +2229,6 @@ class RajatAlphaTradingBot:
                     logger.info(f"  {idx}. [{sym}] Score: {det.get('score')}/7.0 | IBD RS: {det.get('rs_score'):.1f} | Pattern: {det.get('pattern')} | Price: ${det.get('price'):.2f} -> {status_tag}")
             else:
                 logger.info("No candidates maintained qualified status upon 30-min revalidation.")
-            logger.info("=" * 80)
             
             for symbol, details in top_signals[:avail]:
                 if self.config.get('trading_rules', 'prevent_same_day_reentry', True) and self.db.was_traded_today(symbol):
@@ -1887,15 +2243,277 @@ class RajatAlphaTradingBot:
             
         # Collection Phase
         watchlist_file = self.config.get('trading_rules', 'watchlist_file', 'config/watchlist.txt')
-        if not os.path.exists(watchlist_file): return
+        if not os.path.exists(watchlist_file):
+            logger.warning(f"Watchlist file not found: {watchlist_file}")
+            return
+            
         with open(watchlist_file, 'r') as f:
             symbols = [line.strip().upper() for line in f if line.strip()]
             
+        # Check capacity before scanning
+        trades_today = self.db.count_trades_today()
+        max_trades_per_day = self.config.get('trading_rules', 'max_trades_per_day', 3)
+        open_positions = self.db.get_open_positions()
+        max_positions = self.config.get('trading_rules', 'max_open_positions', 15)
+        
+        q_stat = self.signal_queue.get_queue_status()
+        logger.info("=" * 80)
+        logger.info(f"🎯 BUY HUNTER: Watchlist Scan & Candidate Staging ({len(symbols)} Watchlist Symbols)")
+        logger.info(f"Portfolio Slots: {len(open_positions)}/{max_positions} | Trades Today: {trades_today}/{max_trades_per_day} | Queue: {q_stat['signals_queued']} staged ({q_stat['minutes_elapsed']:.1f}m/{self.signal_queue.monitoring_minutes}m)")
+        logger.info("=" * 80)
+        
+        if trades_today >= max_trades_per_day:
+            logger.info(f"Daily trade limit reached ({trades_today}/{max_trades_per_day}), skipping candidate collection.")
+            return
+            
+        if len(open_positions) >= max_positions:
+            logger.info(f"Maximum open positions reached ({len(open_positions)}/{max_positions}), skipping candidate collection.")
+            return
+            
+        new_staged = 0
         for symbol in symbols:
+            # Check per-stock limit
+            existing = self.db.get_open_positions(symbol=symbol)
+            max_per_stock = self.config.get('trading_rules', 'max_trades_per_stock', 1)
+            if len(existing) >= max_per_stock:
+                logger.info(f"[{symbol}] ℹ️ Already holding maximum open position ({len(existing)}/{max_per_stock}), skipping scan.")
+                continue
+                
             valid, details = self.analyzer.analyze_entry_signal(symbol)
+            self.db.log_signal(symbol, details, executed=False)
             if valid:
                 self.signal_queue.add_signal(symbol, details)
-                logger.info(f"[{symbol}] 📥 Staged in Buy Queue: Score {details.get('score')}/7.0 | IBD RS: {details.get('rs_score'):.1f} | Pattern: {details.get('pattern')}")
+                new_staged += 1
+                logger.info(f"[{symbol}] 📥 STAGED IN BUY QUEUE: Score {details.get('score')}/7.0 | IBD RS: {details.get('rs_score'):.1f} | Pattern: {details.get('pattern')} | Price: ${details.get('price'):.2f}")
+                
+        logger.info(f"Buy Hunter scan complete: {new_staged} new candidates staged. Total queue: {len(self.signal_queue.signals)} candidates (re-validates in {self.signal_queue.monitoring_minutes} min).")
+        if self.signal_queue.signals:
+            logger.info("📋 CURRENT STAGED CANDIDATE QUEUE (Awaiting 30-Min Re-Validation):")
+            for q_sym, q_det in self.signal_queue.signals.items():
+                logger.info(f"   • {q_sym:<6} | Score: {q_det.get('score', 0):.1f}/7.0 | RS: {q_det.get('rs_score', 0):.1f} | Pattern: {q_det.get('pattern', 'N/A')} | Price: ${q_det.get('price', 0):.2f}")
+
+    def generate_daily_market_close_snapshot(self):
+        """
+        Compiles and records an Executive End-of-Day (EOD) Market Close Snapshot:
+        - Daily buys, sells, SL triggers, and trailing SL steppers
+        - Signal Funnel & Gate rejection metrics
+        - Closing portfolio status
+        - Outputs to console/rajat_alpha_v67.log and appends to logs/daily_snapshot.log
+        """
+        now_et = datetime.now(pytz.timezone('US/Eastern'))
+        today_str = now_et.strftime('%Y-%m-%d')
+        time_str = now_et.strftime('%H:%M:%S ET')
+        mode_str = "PAPER TRADING" if self.is_paper else "LIVE TRADING"
+        
+        cursor = self.db.conn.cursor()
+        
+        # 1. Buys Executed Today
+        cursor.execute('''
+            SELECT symbol, entry_price, quantity, stop_loss, pattern, score, rs_score, entry_date
+            FROM positions
+            WHERE entry_date LIKE ?
+        ''', (f"{today_str}%",))
+        buys_rows = cursor.fetchall()
+        
+        # 2. Exits Executed Today
+        cursor.execute('''
+            SELECT symbol, entry_price, exit_price, quantity, profit_loss_pct, exit_reason, exit_date
+            FROM positions
+            WHERE status = 'CLOSED' AND exit_date LIKE ?
+        ''', (f"{today_str}%",))
+        full_exits = cursor.fetchall()
+        
+        cursor.execute('''
+            SELECT p.symbol, pe.profit_target, pe.quantity, pe.exit_price, pe.profit_pct, pe.exit_date
+            FROM partial_exits pe
+            JOIN positions p ON pe.position_id = p.id
+            WHERE pe.exit_date LIKE ?
+        ''', (f"{today_str}%",))
+        partial_exits = cursor.fetchall()
+        
+        # 3. Trailing SL Steppers
+        sl_steps = self.position_manager.daily_sl_steps
+        
+        # 4. Signal Funnel & Gate Rejections Today
+        cursor.execute('''
+            SELECT symbol, score, pattern, price, reason, executed, rs_score, candle_pattern
+            FROM signal_history
+            WHERE signal_date LIKE ?
+        ''', (f"{today_str}%",))
+        sig_rows = cursor.fetchall()
+        
+        gate_counts = {
+            'gate_0_regime': 0,
+            'gate_1_structure': 0,
+            'gate_1_5_slope': 0,
+            'gate_2_pullback': 0,
+            'gate_3_pattern': 0,
+            'gate_4_weekly': 0,
+            'gate_6_stalling': 0,
+            'gate_6_25_extended': 0,
+            'gate_6_5_red_candle': 0,
+            'gate_6_75_shooting_star': 0,
+            'gate_7_score': 0,
+            'valid_signals': 0
+        }
+        
+        for row in sig_rows:
+            reason = str(row[4] or "")
+            if "Gate 0" in reason or "Market Regime" in reason or "SPY" in reason:
+                gate_counts['gate_0_regime'] += 1
+            elif "Gate 1 " in reason or "Market structure" in reason or "50 SMA > 200 SMA" in reason:
+                gate_counts['gate_1_structure'] += 1
+            elif "Gate 1.5" in reason or "slope" in reason:
+                gate_counts['gate_1_5_slope'] += 1
+            elif "Gate 2" in reason or "pullback" in reason or "impulse" in reason:
+                gate_counts['gate_2_pullback'] += 1
+            elif "Gate 3" in reason or "reversal pattern" in reason or "qualifying pattern" in reason:
+                gate_counts['gate_3_pattern'] += 1
+            elif "Gate 4" in reason or "Weekly MTF" in reason:
+                gate_counts['gate_4_weekly'] += 1
+            elif "Gate 6 " in reason or "Stalling" in reason or "consolidation" in reason:
+                gate_counts['gate_6_stalling'] += 1
+            elif "Gate 6.25" in reason or "EXTENDED" in reason or "Gap up" in reason:
+                gate_counts['gate_6_25_extended'] += 1
+            elif "Gate 6.5" in reason or "RED today" in reason:
+                gate_counts['gate_6_5_red_candle'] += 1
+            elif "Gate 6.75" in reason or "Shooting star" in reason:
+                gate_counts['gate_6_75_shooting_star'] += 1
+            elif "Gate 7" in reason or "Score" in reason or "Touch-only" in reason:
+                gate_counts['gate_7_score'] += 1
+            
+            if "VALID BUY SIGNAL" in reason or row[5] == 1:
+                gate_counts['valid_signals'] += 1
+        
+        # 5. Open Positions Health
+        open_positions = self.db.get_open_positions()
+        
+        # Build Report
+        sep = "=" * 110
+        sub_sep = "-" * 110
+        lines = [
+            sep,
+            f"🏁 RAJAT ALPHA V67 — END-OF-DAY MARKET CLOSE EXECUTIVE SNAPSHOT",
+            f"Date: {today_str} | Generated: {time_str} | Trading Mode: {mode_str}",
+            sep,
+            "",
+            "1. DAILY ACTION METRICS",
+            sub_sep,
+            f"  • New Buys Executed Today        : {len(buys_rows)}",
+            f"  • Full Exits Executed Today      : {len(full_exits)}",
+            f"  • Partial Profit Targets Hit     : {len(partial_exits)}",
+            f"  • Trailing Stop Stepper Advances : {len(sl_steps)}",
+            f"  • Active Open Positions Monitored: {len(open_positions)}",
+            ""
+        ]
+        
+        lines.append("2. EXECUTION & TRADES SUMMARY")
+        lines.append(sub_sep)
+        lines.append("[BUYS EXECUTED TODAY]")
+        if buys_rows:
+            for b in buys_rows:
+                sym_b = str(b[0] or "")
+                px_b = float(b[1]) if b[1] is not None else 0.0
+                qty_b = int(b[2]) if b[2] is not None else 0
+                sl_b = float(b[3]) if b[3] is not None else 0.0
+                pat_b = str(b[4] or "Unknown")
+                score_b = f"{b[5]:.1f}" if b[5] is not None else "4.0"
+                rs_b = f"{b[6]:.1f}" if b[6] is not None else "50.0"
+                lines.append(f"  • {sym_b:<6} | Qty: {qty_b:>4} | Price: ${px_b:>8.2f} | SL: ${sl_b:>8.2f} | Pattern: {pat_b} | Score: {score_b} | RS: {rs_b}")
+        else:
+            lines.append("  (No new positions established today)")
+            
+        lines.append("")
+        lines.append("[EXITS & PROFIT TAKING TODAY]")
+        if full_exits or partial_exits:
+            for fe in full_exits:
+                sym_fe = str(fe[0] or "")
+                entry_fe = float(fe[1]) if fe[1] is not None else 0.0
+                exit_fe = float(fe[2]) if fe[2] is not None else 0.0
+                qty_fe = int(fe[3]) if fe[3] is not None else 0
+                pnl_fe = float(fe[4]) if fe[4] is not None else 0.0
+                reason_fe = str(fe[5] or "Exit")
+                lines.append(f"  • {sym_fe:<6} | FULL EXIT ({reason_fe}) | Qty: {qty_fe} @ ${exit_fe:.2f} (Entry: ${entry_fe:.2f}) | P/L: {pnl_fe:+.2f}%")
+            for pe in partial_exits:
+                sym_pe = str(pe[0] or "")
+                pt_pe = str(pe[1] or "PT")
+                qty_pe = int(pe[2]) if pe[2] is not None else 0
+                exit_pe = float(pe[3]) if pe[3] is not None else 0.0
+                pnl_pe = float(pe[4]) if pe[4] is not None else 0.0
+                lines.append(f"  • {sym_pe:<6} | PARTIAL EXIT {pt_pe} | Qty: {qty_pe} @ ${exit_pe:.2f} | Profit: {pnl_pe:+.2f}%")
+        else:
+            lines.append("  (No positions exited today)")
+            
+        lines.append("")
+        lines.append("[TRAILING STOP STEPPER ADVANCES TODAY]")
+        if sl_steps:
+            for s in sl_steps:
+                lines.append(f"  • {s['symbol']:<6} | ${s['old_sl']:.2f} -> ${s['new_sl']:.2f} | Stage {s['stage']} | Profit: {s['profit_pct']:+.2f}% | High: ${s['highest_price']:.2f} ({s['time']})")
+        else:
+            lines.append("  (No trailing stop steppers advanced today)")
+            
+        total_scanned = len(sig_rows)
+        ma_period_cfg = int(self.config.get('market_regime', 'index_ma_period', 50))
+        lines.append("")
+        lines.append("3. SIGNAL GENERATION & GATE FUNNEL SUMMARY")
+        lines.append(sub_sep)
+        lines.append(f"  • Watchlist Signal Evaluations: {total_scanned}")
+        lines.append(f"    ├─ Failed Gate 0 (Market Regime SPY/QQQ < {ma_period_cfg} SMA)    : {gate_counts['gate_0_regime']}")
+        lines.append(f"    ├─ Failed Gate 1 (Market Structure 50 > 200 SMA)       : {gate_counts['gate_1_structure']}")
+        lines.append(f"    ├─ Failed Gate 1.5 (MA Slope Downward)                 : {gate_counts['gate_1_5_slope']}")
+        lines.append(f"    ├─ Failed Gate 2 (Preceding Pullback & Impulse)        : {gate_counts['gate_2_pullback']}")
+        lines.append(f"    ├─ Failed Gate 3 (Candlestick Pattern / Touch)         : {gate_counts['gate_3_pattern']}")
+        lines.append(f"    ├─ Failed Gate 4 (Weekly MTF Alignment)                : {gate_counts['gate_4_weekly']}")
+        lines.append(f"    ├─ Failed Gate 6 (Stalling / Horizontal Churning)      : {gate_counts['gate_6_stalling']}")
+        lines.append(f"    ├─ Failed Gate 6.25 (Extended Stock Gap > 4%)          : {gate_counts['gate_6_25_extended']}")
+        lines.append(f"    ├─ Failed Gate 6.5 (Red Session / Lack of Absorption)  : {gate_counts['gate_6_5_red_candle']}")
+        lines.append(f"    ├─ Failed Gate 6.75 (Shooting Star Upper Wick Reject)  : {gate_counts['gate_6_75_shooting_star']}")
+        lines.append(f"    └─ Failed Gate 7 (Score < Min Threshold / Touch Gate)  : {gate_counts['gate_7_score']}")
+        lines.append(f"  • Valid Signals (Passed All Gates)                      : {gate_counts['valid_signals']}")
+        q_stat = self.signal_queue.get_queue_status()
+        lines.append(f"  • Staged Candidates in Queue                            : {q_stat['signals_queued']}")
+        lines.append(f"  • Buys Executed Today                                   : {len(buys_rows)}")
+        
+        lines.append("")
+        lines.append(f"4. CLOSING OPEN PORTFOLIO HEALTH ({len(open_positions)} Open Positions)")
+        lines.append(sub_sep)
+        if open_positions:
+            lines.append(f"{'Symbol':<7} | {'Buy Rate':>9} | {'Curr Price':>10} | {'Qty':>5} | {'P/L (%)':>8} | {'Stop Loss':>10} | {'Stage':>10} | {'Peak':>9} | {'Runner'}")
+            lines.append(sub_sep)
+            tot_cost = 0.0
+            tot_val = 0.0
+            for pos in open_positions:
+                px = self.data_fetcher.get_current_price(pos['symbol']) or pos['entry_price']
+                pl_pct = (px - pos['entry_price']) / pos['entry_price'] * 100
+                stg = f"Stage {pos.get('sl_stage', 0)}"
+                pk = max(pos.get('highest_price_seen') or px, px)
+                runner_str = "YES" if pos.get('is_runner') else "NO"
+                lines.append(f"{pos['symbol']:<7} | ${pos['entry_price']:>8.2f} | ${px:>9.2f} | {pos['remaining_qty']:>5} | {pl_pct:>+7.2f}% | ${pos['stop_loss']:>9.2f} | {stg:>10} | ${pk:>8.2f} | {runner_str:^6}")
+                tot_cost += pos['entry_price'] * pos['remaining_qty']
+                tot_val += px * pos['remaining_qty']
+            tot_pl = tot_val - tot_cost
+            tot_pl_pct = (tot_pl / tot_cost * 100) if tot_cost > 0 else 0.0
+            lines.append(sub_sep)
+            lines.append(f"Portfolio Cost: ${tot_cost:,.2f} | Current Value: ${tot_val:,.2f} | Unrealized P/L: ${tot_pl:+,.2f} ({tot_pl_pct:+.2f}%)")
+        else:
+            lines.append("  (No open positions currently in portfolio)")
+        lines.append(sep)
+        
+        report_text = "\n" + "\n".join(lines) + "\n"
+        
+        # Log to primary logger
+        logger.info(report_text)
+        
+        # Append single clean entry to logs/daily_snapshot.log
+        snapshot_dir = 'logs'
+        os.makedirs(snapshot_dir, exist_ok=True)
+        snapshot_file = os.path.join(snapshot_dir, 'daily_snapshot.log')
+        try:
+            with open(snapshot_file, 'a', encoding='utf-8') as f:
+                f.write(report_text + "\n")
+            logger.info(f"📁 Daily Executive Snapshot saved to {snapshot_file}")
+        except Exception as e:
+            logger.error(f"Failed to write snapshot to {snapshot_file}: {e}")
 
     def run(self):
         """Master execution loop"""
@@ -1904,11 +2522,23 @@ class RajatAlphaTradingBot:
             try:
                 self.process_manual_overrides()
                 if self.is_market_open():
+                    # Reset snapshot flag at beginning of active trading day
+                    if self.daily_snapshot_done:
+                        self.daily_snapshot_done = False
+                        self.position_manager.daily_sl_steps.clear()
+                        self.position_manager.daily_buys.clear()
+                        self.position_manager.daily_exits.clear()
+                        
                     self.run_sell_guardian()
                     self.run_buy_hunter()
                     interval = 60 if self.is_buy_window() else 120
+                    logger.info(f"--- Cycle complete. Next portfolio monitor scan in {interval}s ---")
                     time.sleep(interval)
                 else:
+                    now_et = datetime.now(pytz.timezone('US/Eastern'))
+                    if not self.daily_snapshot_done and now_et.weekday() <= 4 and now_et.hour >= 16:
+                        self.generate_daily_market_close_snapshot()
+                        self.daily_snapshot_done = True
                     logger.info("Market closed. Sleeping 5 minutes...")
                     time.sleep(300)
             except KeyboardInterrupt:

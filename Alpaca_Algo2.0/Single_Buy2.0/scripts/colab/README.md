@@ -9,11 +9,12 @@ This directory contains Jupyter notebooks and Python simulation pipelines implem
 | File | Purpose | Description |
 | :--- | :--- | :--- |
 | `Rajat_Alpha_Institutional_Prop_Protocol.ipynb` | **Master Google Colab Notebook** | End-to-end 15-cell Colab notebook. Runs the 4-step framework (Map, Measure, Simulate, Operate), multi-strategy correlation, capacity-constrained execution simulation, 10,000-run Monte Carlo simulations, and generates a 5-tab downloadable Excel workbook. |
+| `Rajat_Alpha_v67_Colab_Backtest.ipynb` | **5-Year Backtest & Sizing Audit** | Comprehensive backtest notebook with dedicated Cell 4 comparing **Approach 1 (Fixed 3% Capital Allocation)** vs **Approach 2 (Risk-Based Equal Risk Contribution)** side-by-side with equity curves. |
 | `TheInstitutionalProtocol_PropSimulations.ipynb` | **Original Reference Protocol** | Masterclass reference notebook containing the foundational 4-step institutional framework. |
 | `Rajat_Alpha_v67_Scanned_Watchlist_Backtest.ipynb` | **Watchlist Backtest Notebook** | Specialized notebook to backtest custom watchlists and export trade logs. |
 | `generate_prop_protocol_notebook.py` | **Notebook Generator** | Python script that programmatically compiles `Rajat_Alpha_Institutional_Prop_Protocol.ipynb`, ensuring all 15 cells remain in sync with `rajat_alpha_v67_single.py`. |
 | `compare_4_configs_simulation.py` | **4-Configuration Simulator** | Runs local capacity-constrained simulations across 4 risk profiles (Conservative, Target v3.2, Aggressive, Ultra) and builds the 5-tab Excel workbook (`docs/rajat_alpha_4_configs_master_simulation.xlsx`). |
-| `backtest_colab_pipeline.py` | **Backtest Pipeline** | Historical simulation engine executing v3.2 trading rules across multiple years of daily market bars. |
+| `backtest_colab_pipeline.py` | **Backtest Pipeline Engine** | Historical simulation engine executing v3.2 trading rules and comparative position sizing across multiple years of daily market bars. |
 
 ---
 

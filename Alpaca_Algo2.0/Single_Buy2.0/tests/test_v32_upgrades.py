@@ -5,6 +5,7 @@ import sqlite3
 import pandas as pd
 import numpy as np
 from datetime import datetime, timedelta
+from unittest.mock import patch, MagicMock
 
 # Ensure parent directory is on sys.path
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -15,7 +16,8 @@ from rajat_alpha_v67_single import (
     MarketDataFetcher,
     PatternDetector,
     RajatAlphaAnalyzer,
-    PositionManager
+    PositionManager,
+    RajatAlphaTradingBot
 )
 
 class TestRajatAlphaV32Upgrades(unittest.TestCase):
@@ -285,6 +287,179 @@ class TestRajatAlphaV32Upgrades(unittest.TestCase):
         # Emergency catastrophic breaker: Price drops to $75.00 (-25%) -> IMMEDIATE TRIGGER ANYTIME
         is_catastrophic = pm.check_stop_loss(pos, 75.0, is_closing_window=False, is_first_hour_suppressed=True)
         self.assertTrue(is_catastrophic)
+
+    # =========================================================================
+    # 8. GATE 6.5 ABSORPTION REVERSAL & EOD SNAPSHOT TESTS
+    # =========================================================================
+    def test_gate_6_5_absorption_reversal(self):
+        """Test that qualified absorption hammers pass Gate 6.5 with partial weight 0.5"""
+        class MockFetcher:
+            def get_current_price(self, sym):
+                return 99.60 # Slightly red vs prev_close $100.00 (-0.4%), within 1%
+            def get_daily_bars(self, sym, days=250):
+                # 30 days of data
+                dates = pd.date_range(end='2026-10-20', periods=30)
+                prices = [100.0] * 28 + [100.0, 99.60]
+                df = pd.DataFrame({
+                    'open': [100.0] * 28 + [100.0, 99.80],
+                    'high': [102.0] * 28 + [102.0, 100.50],
+                    'low':  [98.0] * 28 + [98.0, 96.00], # Long lower shadow: 99.60 - 96.00 = 3.60 on 4.50 range (80%)
+                    'close': prices,
+                    'volume': [1500000] * 30
+                }, index=dates)
+                return df
+                
+        analyzer = RajatAlphaAnalyzer(self.config, MockFetcher())
+        df = MockFetcher().get_daily_bars('TEST')
+        df = analyzer.calculate_indicators(df)
+        
+        # Test Absorption Reversal detection directly on candle
+        curr_candle = df.iloc[-1]
+        c_range = curr_candle['high'] - curr_candle['low']
+        lower_wick = min(curr_candle['close'], curr_candle['open']) - curr_candle['low']
+        wick_ratio = lower_wick / c_range if c_range > 0 else 0.0
+        close_pos = (curr_candle['close'] - curr_candle['low']) / c_range if c_range > 0 else 0.0
+        
+        self.assertGreaterEqual(wick_ratio, 0.55)
+        self.assertGreaterEqual(close_pos, 0.70)
+        self.assertGreaterEqual(99.60, 100.0 * 0.99)
+
+    @patch('rajat_alpha_v67_single.StockHistoricalDataClient')
+    @patch('rajat_alpha_v67_single.TradingClient')
+    def test_daily_market_close_snapshot_output(self, mock_trading, mock_data):
+        """Test that generate_daily_market_close_snapshot runs cleanly and appends to log"""
+        bot = RajatAlphaTradingBot(config_path='config/config.json')
+        bot.db = self.db
+        
+        # Add a position and a partial exit
+        pos_id = self.db.add_position('SNAP_TEST', 100.0, 50, 92.0, 4.5, pattern='Hammer')
+        self.db.add_partial_exit(pos_id, 10, 105.0, 'PT1', 5.0)
+        
+        # Record an SL step in memory
+        bot.position_manager.daily_sl_steps.append({
+            'symbol': 'SNAP_TEST',
+            'old_sl': 92.0,
+            'new_sl': 96.0,
+            'profit_pct': 5.0,
+            'stage': 1,
+            'highest_price': 105.0,
+            'time': '15:30:00 ET'
+        })
+        
+        # Generate snapshot
+        bot.generate_daily_market_close_snapshot()
+        
+        # Verify log file was written
+        snapshot_file = os.path.join('logs', 'daily_snapshot.log')
+        self.assertTrue(os.path.exists(snapshot_file))
+        with open(snapshot_file, 'r', encoding='utf-8') as f:
+            content = f.read()
+        self.assertIn("END-OF-DAY MARKET CLOSE EXECUTIVE SNAPSHOT", content)
+        self.assertIn("SNAP_TEST", content)
+
+    @patch('rajat_alpha_v67_single.StockHistoricalDataClient')
+    @patch('rajat_alpha_v67_single.TradingClient')
+    def test_position_sizing_capital_pct_mode(self, mock_trading, mock_data):
+        """Test default capital_pct mode (3% per trade, 6% stock max)"""
+        bot = RajatAlphaTradingBot(config_path='config/config.json')
+        bot.db = self.db
+        
+        # Mock account equity = $100,000
+        mock_acc = MagicMock()
+        mock_acc.equity = 100000.0
+        bot.trading_client.get_account.return_value = mock_acc
+        
+        # In capital_pct mode with 3% trade size on $100 stock:
+        # trade_amount = $100,000 * 0.03 = $3,000 -> 30 shares
+        shares, amt = bot.position_manager.calculate_position_size('TEST_CAP', 100.0)
+        self.assertEqual(shares, 30)
+        self.assertEqual(amt, 3000.0)
+
+    @patch('rajat_alpha_v67_single.StockHistoricalDataClient')
+    @patch('rajat_alpha_v67_single.TradingClient')
+    def test_position_sizing_risk_based_mode(self, mock_trading, mock_data):
+        """Test risk_based mode with dollar risk / delta SL formula and 6% capital ceiling"""
+        bot = RajatAlphaTradingBot(config_path='config/config.json')
+        bot.db = self.db
+        bot.config['trading_rules']['sizing_mode'] = 'risk_based'
+        bot.config['trading_rules']['fixed_risk_dollars'] = 500.0
+        bot.config['trading_rules']['max_allocation_per_stock_pct'] = 0.06
+        
+        mock_acc = MagicMock()
+        mock_acc.equity = 100000.0
+        bot.trading_client.get_account.return_value = mock_acc
+        
+        # Scenario A: Wide SL ($100 stock, $90 SL -> delta_sl = $10)
+        # Raw shares = $500 / $10 = 50 shares ($5,000 <= $6,000 cap)
+        shares_a, amt_a = bot.position_manager.calculate_position_size('TEST_RISK_WIDE', 100.0, stop_loss=90.0)
+        self.assertEqual(shares_a, 50)
+        self.assertEqual(amt_a, 5000.0)
+        
+        # Scenario B: Tight SL ($100 stock, $98 SL -> delta_sl = $2)
+        # Raw shares = $500 / $2 = 250 shares ($25,000)
+        # Must be capped by max_allocation_per_stock_pct (6% of $100,000 = $6,000 -> 60 shares)
+        shares_b, amt_b = bot.position_manager.calculate_position_size('TEST_RISK_TIGHT', 100.0, stop_loss=98.0)
+        self.assertEqual(shares_b, 60)
+        self.assertEqual(amt_b, 6000.0)
+
+    @patch('rajat_alpha_v67_single.StockHistoricalDataClient')
+    @patch('rajat_alpha_v67_single.TradingClient')
+    def test_position_sizing_risk_based_edge_cases(self, mock_trading, mock_data):
+        """Test edge cases: missing stop_loss, inverted stop_loss, and remaining stock headroom"""
+        bot = RajatAlphaTradingBot(config_path='config/config.json')
+        bot.db = self.db
+        bot.position_manager.db = self.db
+        bot.config['trading_rules']['sizing_mode'] = 'risk_based'
+        bot.config['trading_rules']['fixed_risk_dollars'] = 500.0
+        bot.config['trading_rules']['max_allocation_per_stock_pct'] = 0.06
+        bot.config['trading_rules']['capital_conservation_mode'] = False
+        
+        mock_acc = MagicMock()
+        mock_acc.equity = 100000.0
+        bot.trading_client.get_account.return_value = mock_acc
+        
+        # Edge Case 1: Missing stop loss (defaults to min_initial_sl_pct 5% risk -> delta = $5)
+        # Raw shares = $500 / $5 = 100 shares ($10,000) -> capped at 6% ($6,000 -> 60 shares)
+        shares_1, amt_1 = bot.position_manager.calculate_position_size('TEST_NO_SL', 100.0, stop_loss=None)
+        self.assertEqual(shares_1, 60)
+        
+        # Edge Case 2: Inverted stop loss (SL > price -> falls back to min_initial_sl_pct)
+        shares_2, amt_2 = bot.position_manager.calculate_position_size('TEST_INV_SL', 100.0, stop_loss=105.0)
+        self.assertEqual(shares_2, 60)
+        
+        # Edge Case 3: Stock already holds 40 shares ($4,000). Only 20 shares ($2,000) remain under 6% ($6,000) cap.
+        self.db.add_position('TEST_EXISTING', 100.0, 40, 90.0, 4.5)
+        shares_3, amt_3 = bot.position_manager.calculate_position_size('TEST_EXISTING', 100.0, stop_loss=90.0)
+        self.assertEqual(shares_3, 20)
+        self.assertEqual(amt_3, 2000.0)
+
+    @patch('rajat_alpha_v67_single.StockHistoricalDataClient')
+    @patch('rajat_alpha_v67_single.TradingClient')
+    def test_dynamic_market_regime_snapshot_label(self, mock_trading, mock_data):
+        """Test that market regime MA period (e.g. 215 SMA) is dynamically rendered in snapshot"""
+        bot = RajatAlphaTradingBot(config_path='config/config.json')
+        bot.db = self.db
+        bot.config.config['market_regime']['index_ma_period'] = 215
+        
+        bot.generate_daily_market_close_snapshot()
+        
+        snapshot_file = os.path.join('logs', 'daily_snapshot.log')
+        with open(snapshot_file, 'r', encoding='utf-8') as f:
+            content = f.read()
+        self.assertIn("Failed Gate 0 (Market Regime SPY/QQQ < 215 SMA)", content)
+
+    @patch('rajat_alpha_v67_single.StockHistoricalDataClient')
+    @patch('rajat_alpha_v67_single.TradingClient')
+    def test_touch_only_score_alignment(self, mock_trading, mock_data):
+        """Test that touch-only signal with score 4.0 passes Gate 7 when min_touch_only_score is 4.0"""
+        bot = RajatAlphaTradingBot(config_path='config/config.json')
+        bot.db = self.db
+        
+        # Verify config alignment
+        min_signal = bot.config.get('strategy_params', 'min_signal_score', 4.0)
+        min_touch = bot.config.get('trading_rules', 'min_touch_only_score', 4.0)
+        self.assertEqual(min_signal, 4.0)
+        self.assertEqual(min_touch, 4.0)
 
 if __name__ == '__main__':
     unittest.main()

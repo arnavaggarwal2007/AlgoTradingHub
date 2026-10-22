@@ -9,7 +9,7 @@
     "max_trades_per_stock": 1,
     "max_trades_per_day": 3,
     "min_signal_score": 4.0,
-    "min_touch_only_score": 5.0,
+    "min_touch_only_score": 4.0,
     "require_bullish_confirmation_for_touch": true,
     "prevent_same_day_reentry": true,
     "watchlist_file": "config/watchlist.txt",
@@ -21,8 +21,11 @@
     "max_equity_utilization_pct": 0.9,
     "enable_dynamic_position_limits": true,
     "capital_conservation_mode": false,
-    "max_allocation_per_stock_pct": 0.06,
+    "sizing_mode": "capital_pct",
     "per_trade_pct": 0.03,
+    "risk_per_trade_pct": 0.005,
+    "fixed_risk_dollars": 500.0,
+    "max_allocation_per_stock_pct": 0.06,
     "enable_swing_signals": true,
     "enable_21touch_signals": true,
     "enable_50touch_signals": true
@@ -149,7 +152,8 @@
   "market_regime": {
     "enable_index_gate": true,
     "index_symbols": ["SPY", "QQQ"],
-    "index_above_sma50_required": true
+    "index_ma_period": 50,
+    "index_above_sma_required": true
   },
   "ma_slope_validation": {
     "enable": true,

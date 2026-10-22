@@ -185,3 +185,4 @@ def test_bar_flow_same_bar_conflict_pt_priority():
     
     assume_pt_first = dist_to_pt < dist_to_sl
     assert assume_pt_first is True
+

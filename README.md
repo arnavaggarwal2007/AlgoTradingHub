@@ -111,7 +111,7 @@ Supported candlestick reversal patterns with institutional conviction weightings
 - Combines pattern/touch (+0.6 to +1.0), weekly MTF (+1.0), demand zone (+1.0), RSI14 > 50 (+1.0), monthly MTF (+1.0), volume > SMA21 (+1.0), and isolated touch state (+0.5 to +1.0) out of 7.0 possible points.
 - **Minimum Threshold**: Configured via `min_signal_score: 4.0`.
 - **Touch-Only Dual Gate**: If no pattern is present and the signal is generated solely by a moving average touch:
-  1. The minimum required conviction score increases from 4.0 to **>= 5.0**.
+  1. The minimum required conviction score is governed by min_touch_only_score (default 4.0, aligned with min_signal_score: 4.0 for TradingView parity, or configurable to 5.0 if an extra point of conviction is desired).
   2. The candle must exhibit a **bullish real body ratio >= 50%** of the range and close in the **upper third (>= 67%)** of the daily range.
 
 ---

@@ -500,3 +500,4 @@ if __name__ == '__main__':
     if os.path.exists(r"D:\Logs-Db-backup\20-oct-26"):
         shutil.copyfile(pdf_path, backup_target)
         print(f"PDF Copied to backup target: {backup_target}")
+

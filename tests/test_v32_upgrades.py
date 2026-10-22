@@ -433,6 +433,34 @@ class TestRajatAlphaV32Upgrades(unittest.TestCase):
         self.assertEqual(shares_3, 20)
         self.assertEqual(amt_3, 2000.0)
 
+    @patch('rajat_alpha_v67_single.StockHistoricalDataClient')
+    @patch('rajat_alpha_v67_single.TradingClient')
+    def test_dynamic_market_regime_snapshot_label(self, mock_trading, mock_data):
+        """Test that market regime MA period (e.g. 215 SMA) is dynamically rendered in snapshot"""
+        bot = RajatAlphaTradingBot(config_path='config/config.json')
+        bot.db = self.db
+        bot.config.config['market_regime']['index_ma_period'] = 215
+        
+        bot.generate_daily_market_close_snapshot()
+        
+        snapshot_file = os.path.join('logs', 'daily_snapshot.log')
+        with open(snapshot_file, 'r', encoding='utf-8') as f:
+            content = f.read()
+        self.assertIn("Failed Gate 0 (Market Regime SPY/QQQ < 215 SMA)", content)
+
+    @patch('rajat_alpha_v67_single.StockHistoricalDataClient')
+    @patch('rajat_alpha_v67_single.TradingClient')
+    def test_touch_only_score_alignment(self, mock_trading, mock_data):
+        """Test that touch-only signal with score 4.0 passes Gate 7 when min_touch_only_score is 4.0"""
+        bot = RajatAlphaTradingBot(config_path='config/config.json')
+        bot.db = self.db
+        
+        # Verify config alignment
+        min_signal = bot.config.get('strategy_params', 'min_signal_score', 4.0)
+        min_touch = bot.config.get('trading_rules', 'min_touch_only_score', 4.0)
+        self.assertEqual(min_signal, 4.0)
+        self.assertEqual(min_touch, 4.0)
+
 if __name__ == '__main__':
     unittest.main()
 

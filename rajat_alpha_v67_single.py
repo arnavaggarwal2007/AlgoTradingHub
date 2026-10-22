@@ -1130,10 +1130,13 @@ class RajatAlphaAnalyzer:
         self.update_touch_tracking(symbol, df_daily)
         
         # GATE 0: Broad Market Regime Gate
+        ma_period = int(self.config.get('market_regime', 'index_ma_period', 50))
         if not self.check_market_regime():
-            result['reason'] = "Broad market regime not bullish (SPY/QQQ < 50 SMA)"
-            logger.info(f"[{symbol}] ❌ Gate 0 Market Regime: FAILED (SPY/QQQ < SMA50)")
+            result['reason'] = f"Broad market regime not bullish (SPY/QQQ < {ma_period} SMA)"
+            logger.info(f"[{symbol}] ❌ Gate 0 Market Regime: FAILED (SPY/QQQ < SMA{ma_period})")
             return False, result
+        else:
+            logger.info(f"[{symbol}] ✅ Gate 0 Market Regime: PASSED - Broad market bullish (SPY/QQQ > {ma_period} SMA)")
 
         # GATE 1: Market Structure
         structure_ok = self.check_market_structure(df_daily)
@@ -1142,12 +1145,16 @@ class RajatAlphaAnalyzer:
             result['reason'] = "Market structure failed (50 SMA > 200 SMA required)"
             logger.info(f"[{symbol}] ❌ Gate 1 Market Structure: FAILED (SMA50 <= SMA200)")
             return False, result
+        else:
+            logger.info(f"[{symbol}] ✅ Gate 1 Market Structure: PASSED - Bullish alignment confirmed")
 
         # GATE 1.5: Regime-Adaptive MA Slope
         if not self.check_ma_slopes(symbol, df_daily):
             result['reason'] = "50 SMA slope negative in non-bull regime"
             logger.info(f"[{symbol}] ❌ Gate 1.5 MA Slope: FAILED (SMA50 downward slope)")
             return False, result
+        else:
+            logger.info(f"[{symbol}] ✅ Gate 1.5 MA Slope: PASSED - Moving average slope verified")
 
         # GATE 2: Preceding Impulse & Orderly Retracement (First criteria: valid pullback)
         pullback_ok = self.check_pullback(df_daily)
@@ -1156,6 +1163,8 @@ class RajatAlphaAnalyzer:
             result['reason'] = "No valid preceding impulse and pullback sequence"
             logger.info(f"[{symbol}] ❌ Gate 2 Pullback: FAILED (No valid impulse + pullback near MAs)")
             return False, result
+        else:
+            logger.info(f"[{symbol}] ✅ Gate 2 Pullback: PASSED - Valid pullback confirmed with downtrend")
 
         # GATE 3: Candlestick Pattern OR Qualified Touch (Pattern formation after pullback)
         pattern_cfg = self.config.get('pattern_config', {})
@@ -1166,6 +1175,11 @@ class RajatAlphaAnalyzer:
             result['reason'] = "No recognized reversal pattern or qualified touch after pullback"
             logger.info(f"[{symbol}] ❌ Gate 3 Setup Pattern/Touch: FAILED (No qualifying pattern or touch)")
             return False, result
+        else:
+            sig_parts = []
+            if pat_found: sig_parts.append(f"Pattern: {pat_name}")
+            if touch_found: sig_parts.append(f"Touch: {touch_type}")
+            logger.info(f"[{symbol}] ✅ Gate 3 Signal Check: PASSED - {' + '.join(sig_parts)} detected")
 
         result['checks']['pattern'] = pat_found
         result['checks']['touch_signal'] = touch_found
@@ -1179,18 +1193,25 @@ class RajatAlphaAnalyzer:
             result['reason'] = "Weekly MTF failed (Weekly Close <= Weekly EMA21)"
             logger.info(f"[{symbol}] ❌ Gate 4 Weekly MTF: FAILED (Weekly Close <= Weekly EMA21)")
             return False, result
+        else:
+            mtf_desc = "Both weekly and monthly aligned" if monthly_ok else "Weekly alignment confirmed"
+            logger.info(f"[{symbol}] ✅ Gate 4 MTF Confirmation: PASSED - {mtf_desc}")
 
         # GATE 5: Demand Zone Proximity Check
         curr_candle = df_daily.iloc[-1]
         low_21 = df_daily['low'].iloc[-21:].min() if len(df_daily) >= 21 else curr_candle['low']
         in_demand_zone = curr_candle['low'] <= (low_21 * 1.035)
         result['checks']['demand_zone'] = in_demand_zone
+        if in_demand_zone:
+            logger.info(f"[{symbol}] ✅ Gate 5 Demand Zone: PASSED - In institutional demand zone (<= 3.5% above 21d low)")
 
         # GATE 6: Stalling Filter
         if self.check_stalling(df_daily):
             result['reason'] = "Stock is in horizontal sideways consolidation"
             logger.info(f"[{symbol}] ❌ Gate 6 Stalling: FAILED (Horizontal consolidation detected)")
             return False, result
+        else:
+            logger.info(f"[{symbol}] ✅ Gate 6 Stalling Filter: PASSED - No consolidation detected")
 
         # GATE 6.25: Extended Stock Filter (Gap > 4%)
         curr_price = self.data_fetcher.get_current_price(symbol)
@@ -1203,6 +1224,8 @@ class RajatAlphaAnalyzer:
                 result['reason'] = f"Stock is EXTENDED (Gap up {gap_pct*100:.2f}%)"
                 logger.info(f"[{symbol}] ❌ Gate 6.25 Extended: FAILED (Gap up {gap_pct*100:.2f}%)")
                 return False, result
+            else:
+                logger.info(f"[{symbol}] ✅ Gate 6.25 Extended Filter: PASSED - Gap within allowed threshold ({gap_pct*100:.2f}%)")
 
         # GATE 6.5: Green Session Confirmation with Absorption Reversal Exemption
         prev_close = df_daily.iloc[-2]['close']
@@ -1230,6 +1253,8 @@ class RajatAlphaAnalyzer:
                 result['reason'] = f"Stock is RED today (${curr_price:.2f} <= ${prev_close:.2f})"
                 logger.info(f"[{symbol}] ❌ Gate 6.5 Green Candle: FAILED (RED today: ${curr_price:.2f} <= ${prev_close:.2f})")
                 return False, result
+        else:
+            logger.info(f"[{symbol}] ✅ Gate 6.5 GREEN CANDLE FILTER: PASSED - Green today (${curr_price:.2f} > ${prev_close:.2f})")
 
         # GATE 6.75: Shooting Star Rejection Filter (MANDATORY)
         max_wick = self.config.get('candle_quality', 'max_upper_wick_ratio', 0.50)
@@ -1238,6 +1263,8 @@ class RajatAlphaAnalyzer:
             result['reason'] = "Shooting star rejection: Upper wick indicates heavy seller distribution"
             logger.info(f"[{symbol}] ❌ Gate 6.75 Shooting Star: FAILED (Upper shadow spans >50% of range)")
             return False, result
+        else:
+            logger.info(f"[{symbol}] ✅ Gate 6.75 Shooting Star Filter: PASSED - No excessive upper wick rejection")
 
         # Compute IBD Relative Strength Composite (0-100) — Informational & Tie-Breaker
         rs_score = self.calculate_rs_composite(symbol, df_daily)
@@ -1254,10 +1281,11 @@ class RajatAlphaAnalyzer:
         # GATE 7: Scoring & Touch-Only Dual Gate
         score = self.calculate_score(df_daily, symbol, weekly_ok, monthly_ok, pat_found, touch_found, pat_weight, rs_score, in_demand_zone=in_demand_zone)
         result['score'] = score
+        min_score = self.config.get('strategy_params', 'min_signal_score', 4.0)
         
         # Touch-Only Dual Gate: If no pattern, require higher score bar + bullish body
         if not pat_found and touch_found:
-            min_touch_score = self.config.get('trading_rules', 'min_touch_only_score', 5.0)
+            min_touch_score = self.config.get('trading_rules', 'min_touch_only_score', min_score)
             if score < min_touch_score:
                 result['reason'] = f"Touch-only score {score:.1f} below required {min_touch_score}"
                 logger.info(f"[{symbol}] ❌ Gate 7 Touch Score: FAILED ({score:.1f} < {min_touch_score})")
@@ -1273,11 +1301,12 @@ class RajatAlphaAnalyzer:
                 logger.info(f"[{symbol}] ❌ Gate 7 Touch Conviction: FAILED (Weak candle body or close position)")
                 return False, result
 
-        min_score = self.config.get('strategy_params', 'min_signal_score', 4.0)
         if score < min_score:
             result['reason'] = f"Score {score:.1f} below minimum {min_score}"
             logger.info(f"[{symbol}] ❌ Gate 7 Minimum Score: FAILED (Score {score:.1f} < {min_score})")
             return False, result
+        else:
+            logger.info(f"[{symbol}] ✅ Gate 7 Score Check: PASSED - Score {score:.1f}/7.0 meets minimum {min_score} (RS: {rs_score:.1f})")
 
         # Valid Signal
         signal_types = []
@@ -2424,11 +2453,12 @@ class RajatAlphaTradingBot:
             lines.append("  (No trailing stop steppers advanced today)")
             
         total_scanned = len(sig_rows)
+        ma_period_cfg = int(self.config.get('market_regime', 'index_ma_period', 50))
         lines.append("")
         lines.append("3. SIGNAL GENERATION & GATE FUNNEL SUMMARY")
         lines.append(sub_sep)
         lines.append(f"  • Watchlist Signal Evaluations: {total_scanned}")
-        lines.append(f"    ├─ Failed Gate 0 (Market Regime SPY/QQQ < 50 SMA)     : {gate_counts['gate_0_regime']}")
+        lines.append(f"    ├─ Failed Gate 0 (Market Regime SPY/QQQ < {ma_period_cfg} SMA)    : {gate_counts['gate_0_regime']}")
         lines.append(f"    ├─ Failed Gate 1 (Market Structure 50 > 200 SMA)       : {gate_counts['gate_1_structure']}")
         lines.append(f"    ├─ Failed Gate 1.5 (MA Slope Downward)                 : {gate_counts['gate_1_5_slope']}")
         lines.append(f"    ├─ Failed Gate 2 (Preceding Pullback & Impulse)        : {gate_counts['gate_2_pullback']}")

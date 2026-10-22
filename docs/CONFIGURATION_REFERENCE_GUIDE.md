@@ -122,7 +122,7 @@ All action strings and enum parameters are parsed with **case-insensitive normal
 - **`max_equity_utilization_pct`** (`float`, default: `0.90`): Maximum portfolio exposure (90% of total equity). Blocks new buys if exceeded.
 - **`capital_conservation_mode`** (`boolean`, default: `false`): When enabled, if portfolio utilization exceeds 70% of max limit, position size or risk allocation is automatically halved.
 - **`portfolio_mode`** (`string`, default: `"watchlist_only"`): Options: `"watchlist_only"` or `"all"`.
-- **`min_touch_only_score`** (`float`, default: `5.0`): Minimum conviction score required to take a trade that has a moving average touch but no candlestick pattern.
+- **`min_touch_only_score`** (`float`, default: `4.0`): Minimum conviction score required to take a trade that has a moving average touch but no candlestick pattern. Setting this to `4.0` aligns perfectly with the TradingView indicator's default `min_score_req = 4.0` threshold. Set to `5.0` if you wish to enforce an extra point of conviction on touch setups that lack a reversal candle pattern.
 
 ---
 

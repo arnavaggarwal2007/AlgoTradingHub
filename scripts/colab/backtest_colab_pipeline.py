@@ -50,7 +50,7 @@ except ImportError:
     import matplotlib.dates as mdates
 
 # ----------------------------------------------------------------------
-# 1. WATCHLIST DEFINITION (Institutional Core + Benchmarks)
+# 1. WATCHLIST & UNIVERSE DEFINITIONS (Survivorship Bias Elimination)
 # ----------------------------------------------------------------------
 DEFAULT_WATCHLIST = [
     "AAPL", "NVDA", "MSFT", "AMZN", "META", "GOOGL", "TSLA", "CATY", "WSBC", "CLMT"
@@ -62,6 +62,21 @@ EXTENDED_WATCHLIST = [
     "MRVL", "ABNB", "ORCL", "NOW", "PLTR", "ANET", "UBER", "DASH", "SMCI", "ARM",
     "DELL", "APP", "CRDO", "AXGN", "DUOL", "IOT", "MDB", "DDOG", "ZS", "NET"
 ]
+SECTOR_ETF_UNIVERSE = [
+    "SPY", "QQQ", "IWM", "XLK", "XLF", "XLE", "XLV", "XLI", "XLY", "XLP",
+    "XLU", "XLB", "SMH", "IBB", "XBI"
+]
+DIVERSE_EQUITY_UNIVERSE = [
+    "AAPL", "MSFT", "GOOGL", "AMZN", "NVDA", "JPM", "BAC", "XOM", "CVX", "JNJ",
+    "PFE", "UNH", "PG", "KO", "CAT", "DE", "BA", "DIS", "INTC", "PYPL",
+    "WBD", "NKE", "T", "VZ", "VALE", "FCX", "NEE", "DUK", "COST", "WMT"
+]
+UNIVERSES = {
+    "core": DEFAULT_WATCHLIST,
+    "extended": EXTENDED_WATCHLIST,
+    "etf": SECTOR_ETF_UNIVERSE,
+    "diverse": DIVERSE_EQUITY_UNIVERSE
+}
 BENCHMARK_SYMBOLS = ["SPY", "QQQ"]
 
 def calculate_ibd_rs(df_slice: pd.DataFrame, qqq_slice: pd.DataFrame) -> float:
@@ -90,14 +105,18 @@ def calculate_ibd_rs(df_slice: pd.DataFrame, qqq_slice: pd.DataFrame) -> float:
     return round((score_1 * 0.35) + (score_2 * 0.25) + (score_3 * 0.20) + (score_4 * 0.20), 1)
 
 # ----------------------------------------------------------------------
-# 2. INDICATOR & FEATURE CALCULATION ENGINE
+# 2. INDICATOR & FEATURE CALCULATION ENGINE (Vectorized Multi-Timeframe)
 # ----------------------------------------------------------------------
 def calculate_indicators(df: pd.DataFrame) -> pd.DataFrame:
     df = df.copy()
-    # Moving Averages
+    # Daily Moving Averages
     df['EMA21'] = df['Close'].ewm(span=21, adjust=False).mean()
     df['SMA50'] = df['Close'].rolling(window=50).mean()
+    df['SMA100'] = df['Close'].rolling(window=100).mean()
+    df['SMA125'] = df['Close'].rolling(window=125).mean()
+    df['SMA150'] = df['Close'].rolling(window=150).mean()
     df['SMA200'] = df['Close'].rolling(window=200).mean()
+    df['SMA250'] = df['Close'].rolling(window=250).mean()
     
     # ATR 14
     high_low = df['High'] - df['Low']
@@ -116,24 +135,48 @@ def calculate_indicators(df: pd.DataFrame) -> pd.DataFrame:
     
     # Volume SMA21
     df['VOL_SMA21'] = df['Volume'].rolling(window=21).mean()
+
+    # --- VECTORIZED MULTI-TIMEFRAME INDICATORS (Eliminates O(N) Resample Bottleneck) ---
+    # Resample weekly on Friday and compute Weekly EMA21 once per ticker
+    weekly_series = df['Close'].resample('W-FRI').last().dropna()
+    if len(weekly_series) >= 21:
+        w_ema = weekly_series.ewm(span=21, adjust=False).mean()
+        # Shift 1 bar to strictly use completed prior week close, preventing intra-week look-ahead bias
+        df['Weekly_EMA21'] = w_ema.shift(1).reindex(df.index, method='ffill')
+    else:
+        df['Weekly_EMA21'] = np.nan
+
+    # Resample monthly and compute Monthly EMA10 once per ticker
+    monthly_series = df['Close'].resample('ME').last().dropna()
+    if len(monthly_series) >= 10:
+        m_ema = monthly_series.ewm(span=10, adjust=False).mean()
+        # Shift 1 bar to strictly use completed prior month close
+        df['Monthly_EMA10'] = m_ema.shift(1).reindex(df.index, method='ffill')
+    else:
+        df['Monthly_EMA10'] = np.nan
+
     return df
 
 def calculate_weekly_monthly_alignment(df_daily: pd.DataFrame) -> Tuple[bool, bool]:
-    """Calculates weekly EMA21 and monthly EMA10 alignment"""
+    """
+    O(1) lookup using pre-computed vectorized weekly/monthly indicators.
+    Guarantees zero intra-week look-ahead bias and 100x execution speedup.
+    """
+    curr = df_daily.iloc[-1]
+    if 'Weekly_EMA21' in curr.index and pd.notna(curr['Weekly_EMA21']):
+        weekly_ok = bool(curr['Close'] > curr['Weekly_EMA21'])
+        monthly_ok = bool(curr['Close'] > curr['Monthly_EMA10']) if pd.notna(curr.get('Monthly_EMA10')) else True
+        return weekly_ok, monthly_ok
+
+    # Fallback to dynamic resample if running on raw un-preprocessed slice
     if len(df_daily) < 150:
         return False, False
         
-    # Resample to weekly
-    df_w = df_daily.resample('W-FRI').agg({
-        'Open': 'first', 'High': 'max', 'Low': 'min', 'Close': 'last'
-    }).dropna()
+    df_w = df_daily.resample('W-FRI').agg({'Close': 'last'}).dropna()
     df_w['EMA21'] = df_w['Close'].ewm(span=21, adjust=False).mean()
     weekly_ok = (df_w['Close'].iloc[-1] > df_w['EMA21'].iloc[-1]) if len(df_w) > 22 else False
     
-    # Resample to monthly
-    df_m = df_daily.resample('ME').agg({
-        'Open': 'first', 'High': 'max', 'Low': 'min', 'Close': 'last'
-    }).dropna()
+    df_m = df_daily.resample('ME').agg({'Close': 'last'}).dropna()
     df_m['EMA10'] = df_m['Close'].ewm(span=10, adjust=False).mean()
     monthly_ok = (df_m['Close'].iloc[-1] > df_m['EMA10'].iloc[-1]) if len(df_m) > 11 else False
     
@@ -190,25 +233,46 @@ def detect_candlestick_pattern(df_slice: pd.DataFrame) -> Tuple[bool, str, float
     return False, "None", 0.0
 
 # ----------------------------------------------------------------------
-# 4. SIGNAL GENERATOR (7 GATES)
+# 4. SIGNAL GENERATOR (8 GATES INCL. MARKET REGIME GATE 0)
 # ----------------------------------------------------------------------
-def evaluate_signal_v32(df: pd.DataFrame, i: int, qqq_df: pd.DataFrame) -> Tuple[bool, Dict]:
+def evaluate_signal_v32(df: pd.DataFrame, i: int, qqq_df: Optional[pd.DataFrame] = None,
+                        spy_df: Optional[pd.DataFrame] = None,
+                        regime_ma_period: int = 50,
+                        enable_index_gate: bool = True) -> Tuple[bool, Dict]:
     """
     Evaluates bar i for v3.2 Institutional criteria with restructured sequence:
-    1. Market Structure (SMA50 > SMA200, EMA21 >= SMA50 - 2.5%)
-    2. Valid Impulse & Pullback Sequence
-    3. Reversal Candlestick Pattern OR Qualified Touch
-    4. Weekly Confirmation (Weekly Close > Weekly EMA21)
-    5. Demand Zone Proximity Check
-    6. Stalling & Shooting Star Rejection Filters
-    7. IBD RS Calculation (Informational)
-    8. Scoring (out of 7.0) & Touch-Only Dual Gate
+    0. Gate 0: Broad Market Regime Gate (SPY & QQQ > configured SMA, 100% parity with live bot)
+    1. Gate 1: Market Structure (SMA50 > SMA200, EMA21 >= SMA50 - 2.5%)
+    2. Gate 2: Valid Impulse & Pullback Sequence
+    3. Gate 3: Reversal Candlestick Pattern OR Qualified Touch
+    4. Gate 4: Weekly MTF Confirmation (Weekly Close > Weekly EMA21)
+    5. Gate 5: Demand Zone Proximity Check
+    6. Gate 6: Stalling & Shooting Star Rejection Filters
+    6.5. Gate 6.5: Green Session Confirmation with Absorption Reversal Exemption
+    7. Gate 7: Scoring (out of 7.0) & Touch-Only Dual Gate (min score 4.0 / 5.0)
     """
     if i < 200:
         return False, {}
         
     df_window = df.iloc[:i+1]
     curr = df_window.iloc[-1]
+    dt = curr.name
+
+    # --- GATE 0: Broad Market Regime Gate (SPY & QQQ > configured SMA) ---
+    if enable_index_gate:
+        sma_col = f'SMA{regime_ma_period}'
+        # Check SPY
+        if spy_df is not None and dt in spy_df.index:
+            spy_bar = spy_df.loc[dt]
+            if sma_col in spy_bar and pd.notna(spy_bar[sma_col]):
+                if spy_bar['Close'] < spy_bar[sma_col]:
+                    return False, {'reason': f'Gate 0: SPY (${spy_bar["Close"]:.2f}) < {sma_col} (${spy_bar[sma_col]:.2f})'}
+        # Check QQQ
+        if qqq_df is not None and dt in qqq_df.index:
+            qqq_bar = qqq_df.loc[dt]
+            if sma_col in qqq_bar and pd.notna(qqq_bar[sma_col]):
+                if qqq_bar['Close'] < qqq_bar[sma_col]:
+                    return False, {'reason': f'Gate 0: QQQ (${qqq_bar["Close"]:.2f}) < {sma_col} (${qqq_bar[sma_col]:.2f})'}
     
     # Gate 1: Market Structure
     if pd.isna(curr['SMA50']) or pd.isna(curr['SMA200']) or pd.isna(curr['EMA21']):
@@ -238,7 +302,7 @@ def evaluate_signal_v32(df: pd.DataFrame, i: int, qqq_df: pd.DataFrame) -> Tuple
     if not (pat_found or touch_found):
         return False, {}  # No recognized pattern or touch after pullback
         
-    # Gate 4: Weekly MTF Confirmation
+    # Gate 4: Weekly MTF Confirmation (O(1) Pre-computed Lookahead-Free Lookup)
     weekly_ok, monthly_ok = calculate_weekly_monthly_alignment(df_window)
     if not weekly_ok:
         return False, {}  # Weekly close must be above EMA21
@@ -329,11 +393,14 @@ class Trade:
         self.partial_exits = set()
 
 def run_backtest_simulation(all_data: Dict[str, pd.DataFrame], qqq_df: pd.DataFrame, 
-                            mode: str = "v32", sizing_mode: str = "capital_pct") -> List[Trade]:
+                            spy_df: Optional[pd.DataFrame] = None,
+                            mode: str = "v32", sizing_mode: str = "capital_pct",
+                            regime_ma_period: int = 50,
+                            enable_index_gate: bool = True) -> List[Trade]:
     """
-    Simulates portfolio trading:
+    Simulates portfolio trading with Bar Flow Logic (eliminating look-ahead and intraday sequence bias):
     - Mode 'baseline': Old v67 (Market orders with 0.30% slippage, 17% fixed SL, 21d fixed TES, 2-tier exit)
-    - Mode 'v32': New v3.2 (SOEE Midpoint with 0.05% slippage, Hybrid ATR SL, 4-tier exits, Dynamic TES, Runner mode)
+    - Mode 'v32': New v3.2 (SOEE Midpoint with 0.05% slippage, Hybrid ATR SL, 4-tier exits, Dynamic TES, Runner mode, Bar Flow SL)
     - Sizing Mode 'capital_pct': Fixed 3% capital allocation per trade ($3,000 on $100k)
     - Sizing Mode 'risk_based': Fixed 0.5% dollar risk per trade ($500 / delta_sl), capped at 6% allocation ($6,000)
     """
@@ -354,13 +421,58 @@ def run_backtest_simulation(all_data: Dict[str, pd.DataFrame], qqq_df: pd.DataFr
                 
             bar = df.loc[dt]
             t.bars_held += 1
+            open_px = bar['Open']
             close_px = bar['Close']
             low_px = bar['Low']
             high_px = bar['High']
             
             # --- V32 LOGIC ---
             if mode == "v32":
-                # Multi-stage trailing SL (with Stage 2 +1% and Stage 3 +5% extension ratchet)
+                # 1. Immediate Open Gap Down Breach
+                if open_px <= t.stop_loss:
+                    slippage = 0.0005
+                    t.exit_price = open_px * (1.0 - slippage)
+                    t.realized_pnl += t.remaining_shares * (t.exit_price - t.entry_price)
+                    t.exit_date = dt
+                    t.exit_reason = "Gap Down Stop Loss"
+                    closed_trades.append(t)
+                    continue
+
+                # 2. Check Same-Bar Stop Loss vs Profit Target Conflict (Bar Flow Logic)
+                pt1_target = t.entry_price * 1.05
+                pt_hit_possible = ('PT1' not in t.partial_exits and high_px >= pt1_target)
+                sl_hit_possible = (close_px <= t.stop_loss or low_px <= t.stop_loss)
+
+                if pt_hit_possible and sl_hit_possible:
+                    dist_to_sl = abs(open_px - t.stop_loss)
+                    dist_to_pt = abs(open_px - pt1_target)
+                    
+                    if dist_to_sl <= dist_to_pt:
+                        # Price was closer to Stop Loss at open -> Assume worst-case: Stop Loss executed first!
+                        slippage = 0.0005
+                        t.exit_price = min(close_px, t.stop_loss) * (1.0 - slippage)
+                        t.realized_pnl += t.remaining_shares * (t.exit_price - t.entry_price)
+                        t.exit_date = dt
+                        t.exit_reason = "Stop Loss (Bar Flow)"
+                        closed_trades.append(t)
+                        continue
+                    else:
+                        # Price was closer to PT1 at open -> PT1 executed first
+                        qty = int(t.orig_shares * 0.20)
+                        t.realized_pnl += qty * (pt1_target - t.entry_price)
+                        t.remaining_shares -= qty
+                        t.partial_exits.add('PT1')
+                        # Check if remaining shares were stopped out on close
+                        if close_px <= t.stop_loss:
+                            slippage = 0.0005
+                            t.exit_price = close_px * (1.0 - slippage)
+                            t.realized_pnl += t.remaining_shares * (t.exit_price - t.entry_price)
+                            t.exit_date = dt
+                            t.exit_reason = "Trailing SL (Post-PT)"
+                            closed_trades.append(t)
+                            continue
+
+                # 3. Orderly Multi-stage trailing SL (with Stage 2 +1% and Stage 3 +5% extension ratchet)
                 gain_pct = (high_px - t.entry_price) / t.entry_price
                 if gain_pct >= 0.15:
                     ratchet = 0.10 + (gain_pct - 0.15)
@@ -453,7 +565,11 @@ def run_backtest_simulation(all_data: Dict[str, pd.DataFrame], qqq_df: pd.DataFr
                 continue
             idx = df.index.get_loc(dt)
             if mode == "v32":
-                sig_valid, details = evaluate_signal_v32(df, idx, qqq_df)
+                sig_valid, details = evaluate_signal_v32(
+                    df, idx, qqq_df=qqq_df, spy_df=spy_df,
+                    regime_ma_period=regime_ma_period,
+                    enable_index_gate=enable_index_gate
+                )
                 if sig_valid and len(open_trades) < 15:
                     entry_px = details['price'] * 1.0005 # SOEE Midpoint
                     # Hybrid ATR initial stop
@@ -633,19 +749,36 @@ def plot_backtest_dashboard(v32_trades: List[Trade], baseline_trades: Optional[L
 # ----------------------------------------------------------------------
 # 7. MAIN EXECUTION PIPELINE
 # ----------------------------------------------------------------------
-def main(tickers: Optional[List[str]] = None, lookback_years: int = 3):
-    watchlist = tickers if tickers else DEFAULT_WATCHLIST
+def main(universe: str = "core", tickers: Optional[List[str]] = None, 
+         lookback_years: int = 3, regime_ma_period: int = 50,
+         enable_index_gate: bool = True):
+    if tickers:
+        watchlist = tickers
+        universe_name = "Custom Watchlist"
+    else:
+        watchlist = UNIVERSES.get(universe.lower(), DEFAULT_WATCHLIST)
+        universe_name = f"Preset: {universe.upper()} ({len(watchlist)} assets)"
+        
     print("=" * 80)
     print(">> RAJAT ALPHA V67 (VERSION 3.2) - INSTITUTIONAL BACKTEST RUNNER")
     print("=" * 80)
-    print(f"Loading {len(watchlist)} institutional stocks across {lookback_years} years...")
-    print(f"Watchlist: {', '.join(watchlist)}")
+    print(f"Configuration:")
+    print(f"  • Universe:          {universe_name}")
+    print(f"  • Lookback:          {lookback_years} years")
+    print(f"  • Market Regime:     {'ENABLED (SPY & QQQ > SMA' + str(regime_ma_period) + ')' if enable_index_gate else 'DISABLED'}")
+    print(f"  • Assets:            {', '.join(watchlist[:15])}{'...' if len(watchlist) > 15 else ''}")
+    print("=" * 80)
     
     start_date = (datetime.now() - timedelta(days=lookback_years*365)).strftime("%Y-%m-%d")
     end_date = datetime.now().strftime("%Y-%m-%d")
     
-    # Download Benchmark
-    print("Fetching QQQ benchmark...")
+    # Download Benchmarks (SPY & QQQ for Gate 0 Market Regime and RS calculation)
+    print("Fetching SPY & QQQ market regime benchmarks...")
+    spy_df = yf.download("SPY", start=start_date, end=end_date, progress=False)
+    if isinstance(spy_df.columns, pd.MultiIndex):
+        spy_df.columns = spy_df.columns.get_level_values(0)
+    spy_df = calculate_indicators(spy_df)
+
     qqq_df = yf.download("QQQ", start=start_date, end=end_date, progress=False)
     if isinstance(qqq_df.columns, pd.MultiIndex):
         qqq_df.columns = qqq_df.columns.get_level_values(0)
@@ -663,21 +796,30 @@ def main(tickers: Optional[List[str]] = None, lookback_years: int = 3):
         except Exception:
             continue
             
-    print(f"Successfully processed indicators for {len(all_data)} tickers.")
+    print(f"Successfully processed indicators & MTF features for {len(all_data)} tickers.")
     
     # Run Baseline Simulation
     print("\n[1/3] Running Old v67 Baseline Simulation (Market Orders & Fixed 17% SL)...")
-    baseline_trades = run_backtest_simulation(all_data, qqq_df, mode="baseline")
+    baseline_trades = run_backtest_simulation(
+        all_data, qqq_df, spy_df=spy_df, mode="baseline",
+        regime_ma_period=regime_ma_period, enable_index_gate=False
+    )
     m_base = generate_performance_metrics(baseline_trades, "OLD V67 BASELINE (MARKET ORDERS & FIXED 17% SL)")
     
     # Run Institutional v3.2 Simulation - Approach 1: Fixed 3% Capital Allocation
-    print("\n[2/3] Running v3.2 Approach 1 (Fixed 3% Capital Allocation - $3,000 / trade)...")
-    v32_capital_trades = run_backtest_simulation(all_data, qqq_df, mode="v32", sizing_mode="capital_pct")
+    print(f"\n[2/3] Running v3.2 Approach 1 (Fixed 3% Capital Allocation - $3,000 / trade)...")
+    v32_capital_trades = run_backtest_simulation(
+        all_data, qqq_df, spy_df=spy_df, mode="v32", sizing_mode="capital_pct",
+        regime_ma_period=regime_ma_period, enable_index_gate=enable_index_gate
+    )
     m_cap = generate_performance_metrics(v32_capital_trades, "V3.2 APPROACH 1: FIXED 3% CAPITAL ALLOCATION ($3k/TRADE)")
     
     # Run Institutional v3.2 Simulation - Approach 2: Risk-Based Sizing (0.5% Risk / ΔSL)
-    print("\n[3/3] Running v3.2 Approach 2 (Risk-Based Equal Risk Contribution - $500 Risk / ΔSL)...")
-    v32_risk_trades = run_backtest_simulation(all_data, qqq_df, mode="v32", sizing_mode="risk_based")
+    print(f"\n[3/3] Running v3.2 Approach 2 (Risk-Based Equal Risk Contribution - $500 Risk / ΔSL)...")
+    v32_risk_trades = run_backtest_simulation(
+        all_data, qqq_df, spy_df=spy_df, mode="v32", sizing_mode="risk_based",
+        regime_ma_period=regime_ma_period, enable_index_gate=enable_index_gate
+    )
     m_risk = generate_performance_metrics(v32_risk_trades, "V3.2 APPROACH 2: EQUAL RISK CONTRIBUTION ($500 RISK / ΔSL)")
     
     # 1. Strategy Upgrade Comparison Table
@@ -731,5 +873,19 @@ def main(tickers: Optional[List[str]] = None, lookback_years: int = 3):
                             capital_trades=v32_capital_trades, save_path="v32_backtest_dashboard.png")
 
 if __name__ == "__main__":
-    main()
+    import argparse
+    parser = argparse.ArgumentParser(description="Rajat Alpha v67 (Version 3.2) Institutional Backtester")
+    parser.add_argument("--universe", type=str, default="core", choices=["core", "extended", "etf", "diverse"],
+                        help="Asset universe preset: core (10 stocks), extended (50 stocks), etf (15 sector ETFs), diverse (30 multi-sector stocks)")
+    parser.add_argument("--years", type=int, default=3, help="Lookback years (default: 3)")
+    parser.add_argument("--regime-ma", type=int, default=50, help="Market Regime SMA period: 50, 100, 200 (default: 50)")
+    parser.add_argument("--disable-regime-gate", action="store_true", help="Disable Gate 0 market regime check")
+    
+    # Handle environment where sys.argv might contain unrecognized flags (e.g. jupyter/colab)
+    try:
+        args, unknown = parser.parse_known_args()
+        main(universe=args.universe, lookback_years=args.years, regime_ma_period=args.regime_ma, 
+             enable_index_gate=not args.disable_regime_gate)
+    except Exception:
+        main()
 

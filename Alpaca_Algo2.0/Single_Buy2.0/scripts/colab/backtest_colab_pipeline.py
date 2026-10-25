@@ -359,13 +359,62 @@ def evaluate_signal_v32(df: pd.DataFrame, i: int, qqq_df: Optional[pd.DataFrame]
     elif score < 4.0:
         return False, {}
         
+    vol_sma21 = curr['VOL_SMA21'] if 'VOL_SMA21' in curr and curr['VOL_SMA21'] > 0 else 1.0
+    rvol = round(curr['Volume'] / vol_sma21, 2)
+    ema21_prev5 = df.iloc[i-5]['EMA21'] if i >= 5 else curr['EMA21']
+    slope_21_pct = round(((curr['EMA21'] - ema21_prev5) / ema21_prev5) * 100.0, 2) if ema21_prev5 > 0 else 0.0
+    sma50_prev20 = df.iloc[i-20]['SMA50'] if i >= 20 else curr['SMA50']
+    slope_50_pct = round(((curr['SMA50'] - sma50_prev20) / sma50_prev20) * 100.0, 2) if sma50_prev20 > 0 else 0.0
+    dist_to_ema21_pct = round(abs(curr['Close'] - curr['EMA21']) / curr['EMA21'] * 100.0, 2)
+    dollar_vol = float(curr['Close'] * vol_sma21)
+    candle_wt = pat_weight if pat_found else 0.40
+
     return True, {
         'price': curr['Close'],
         'atr': curr['ATR14'],
         'score': round(score, 1),
         'rs_score': rs_score,
-        'pattern': pat_name if pat_found else "Touch-Only"
+        'pattern': pat_name if pat_found else "Touch-Only",
+        'candle_weight': candle_wt,
+        'rvol': rvol,
+        'slope_21_pct': slope_21_pct,
+        'slope_50_pct': slope_50_pct,
+        'dist_to_ema21_pct': dist_to_ema21_pct,
+        'dollar_volume': dollar_vol
     }
+
+def calculate_composite_priority_score(details: Dict) -> float:
+    """Calculates Institutional Composite Priority Score (CPS) for deterministic candidate ranking"""
+    raw_score = float(details.get('score', 4.0))
+    base_score_norm = min(1.0, max(0.0, (raw_score - 4.0) / 3.0))
+    candle_weight = float(details.get('candle_weight', 0.40))
+    rvol = float(details.get('rvol', 1.0))
+    if rvol >= 2.0:
+        rvol_score = 1.0
+    elif rvol >= 1.5:
+        rvol_score = 0.8
+    elif rvol >= 1.0:
+        rvol_score = 0.5
+    else:
+        rvol_score = max(0.0, rvol * 0.5)
+        
+    slope_21 = float(details.get('slope_21_pct', 0.0))
+    slope_50 = float(details.get('slope_50_pct', 0.0))
+    dist_21 = float(details.get('dist_to_ema21_pct', 0.0))
+    
+    ma_score = 0.5
+    if slope_21 > 0: ma_score += 0.25
+    if slope_50 >= 0: ma_score += 0.15
+    else: ma_score -= 0.20
+    if dist_21 <= 1.5: ma_score += 0.10
+    elif dist_21 > 3.0: ma_score -= 0.10
+    ma_score = min(1.0, max(0.0, ma_score))
+    
+    rs_raw = float(details.get('rs_score', 50.0))
+    rs_norm = min(1.0, max(0.0, rs_raw / 100.0))
+    
+    cps = (base_score_norm * 0.30) + (candle_weight * 0.25) + (rvol_score * 0.20) + (ma_score * 0.15) + (rs_norm * 0.10)
+    return round(cps, 4)
 
 # ----------------------------------------------------------------------
 # 5. SIMULATION ENGINES: BASELINE VS INSTITUTIONAL
@@ -427,7 +476,7 @@ def run_backtest_simulation(all_data: Dict[str, pd.DataFrame], qqq_df: pd.DataFr
             high_px = bar['High']
             
             # --- V32 LOGIC ---
-            if mode == "v32":
+            if mode in ["v32", "v32_no_cps"]:
                 # 1. Immediate Open Gap Down Breach
                 if open_px <= t.stop_loss:
                     slippage = 0.0005
@@ -559,47 +608,80 @@ def run_backtest_simulation(all_data: Dict[str, pd.DataFrame], qqq_df: pd.DataFr
             surviving_trades.append(t)
         open_trades = surviving_trades
 
-        # 2. Check New Buy Signals
+        # 2. Check New Buy Signals with Institutional Candidate Ranking & Tie-Breaking
+        daily_candidates = []
         for sym, df in all_data.items():
             if dt not in df.index:
                 continue
             idx = df.index.get_loc(dt)
-            if mode == "v32":
+            if mode in ["v32", "v32_no_cps"]:
                 sig_valid, details = evaluate_signal_v32(
                     df, idx, qqq_df=qqq_df, spy_df=spy_df,
                     regime_ma_period=regime_ma_period,
                     enable_index_gate=enable_index_gate
                 )
-                if sig_valid and len(open_trades) < 15:
-                    entry_px = details['price'] * 1.0005 # SOEE Midpoint
-                    # Hybrid ATR initial stop
-                    atr = details['atr']
-                    init_sl = entry_px - (2.0 * atr) if atr > 0 else entry_px * 0.83
-                    init_sl = max(entry_px * 0.83, min(entry_px * 0.95, init_sl))
-                    
-                    # Position Sizing: Approach 1 (Fixed 3% Capital) vs Approach 2 (0.5% Risk / Delta SL)
-                    if sizing_mode == "risk_based":
-                        dollar_risk = 500.0  # 0.5% of $100k equity
-                        risk_per_share = max(0.50, entry_px - init_sl)
-                        raw_shares = max(1, int(dollar_risk / risk_per_share))
-                        # Bound to max 6% allocation ($6,000)
-                        max_shares = max(1, int(6000.0 / entry_px))
-                        shares = min(raw_shares, max_shares)
-                    else:
-                        # Approach 1: Fixed 3% capital allocation ($3,000 on $100k equity)
-                        shares = max(1, int(3000.0 / entry_px))
-
-                    open_trades.append(Trade(sym, dt, entry_px, init_sl, shares, is_v32=True))
+                if sig_valid:
+                    details['symbol'] = sym
+                    details['cps'] = calculate_composite_priority_score(details)
+                    daily_candidates.append(details)
             else:
-                # Old baseline: looser entry, 17% fixed SL, market order slippage
                 if idx >= 200:
                     c = df.iloc[idx]
                     if c['SMA50'] > c['SMA200'] and c['Close'] > c['EMA21']:
-                        entry_px = c['Close'] * 1.0035 # Market order crossing spread
-                        init_sl = entry_px * 0.83      # Fixed 17% stop
+                        daily_candidates.append({
+                            'symbol': sym,
+                            'price': c['Close'],
+                            'score': 4.0,
+                            'rs_score': 50.0,
+                            'dollar_volume': float(c['Close'] * c['Volume']),
+                            'cps': 0.5
+                        })
+                        
+        if daily_candidates:
+            if mode == "v32":
+                # Deterministic Institutional Ranking: Score DESC, CPS DESC, RS DESC, Dollar Volume DESC
+                daily_candidates.sort(
+                    key=lambda x: (x.get('score', 0.0), x.get('cps', 0.0), x.get('rs_score', 0.0), x.get('dollar_volume', 0.0)),
+                    reverse=True
+                )
+            elif mode == "v32_no_cps":
+                # Legacy Ranking: Score DESC, RS DESC, Dollar Volume DESC (No CPS tie-breaker)
+                daily_candidates.sort(
+                    key=lambda x: (x.get('score', 0.0), x.get('rs_score', 0.0), x.get('dollar_volume', 0.0)),
+                    reverse=True
+                )
+                
+            slots_avail = max(0, 15 - len(open_trades))
+            daily_limit = 3  # Max 3 trades per day
+            slots_to_fill = min(slots_avail, daily_limit)
+            
+            for details in daily_candidates[:slots_to_fill]:
+                sym = details['symbol']
+                # Prevent duplicate same-symbol entry
+                if any(t.symbol == sym for t in open_trades):
+                    continue
+                    
+                if mode in ["v32", "v32_no_cps"]:
+                    entry_px = details['price'] * 1.0005  # SOEE Midpoint Execution
+                    atr = details.get('atr', entry_px * 0.03)
+                    init_sl = entry_px - (2.0 * atr) if atr > 0 else entry_px * 0.83
+                    init_sl = max(entry_px * 0.83, min(entry_px * 0.95, init_sl))
+                    
+                    if sizing_mode == "risk_based":
+                        dollar_risk = 500.0  # 0.5% risk on $100k equity
+                        risk_per_share = max(0.50, entry_px - init_sl)
+                        raw_shares = max(1, int(dollar_risk / risk_per_share))
+                        max_shares = max(1, int(6000.0 / entry_px))
+                        shares = min(raw_shares, max_shares)
+                    else:
                         shares = max(1, int(3000.0 / entry_px))
-                        if len(open_trades) < 15:
-                            open_trades.append(Trade(sym, dt, entry_px, init_sl, shares, is_v32=False))
+                        
+                    open_trades.append(Trade(sym, dt, entry_px, init_sl, shares, is_v32=True))
+                else:
+                    entry_px = details['price'] * 1.0035  # Market order spread crossing
+                    init_sl = entry_px * 0.83
+                    shares = max(1, int(3000.0 / entry_px))
+                    open_trades.append(Trade(sym, dt, entry_px, init_sl, shares, is_v32=False))
                             
     return closed_trades
 

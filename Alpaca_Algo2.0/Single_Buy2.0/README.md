@@ -1,6 +1,6 @@
-# Rajat Alpha v67 - Single Buy Trading Bot (Institutional Upgrade v3.2)
+# Rajat Alpha v67 - Single Buy Trading Bot (Institutional Upgrade v3.3)
 
-[![Version](https://img.shields.io/badge/version-3.2-blue.svg)](file:///C:/Alpaca_Algo2.0/Single_Buy2.0/rajat_alpha_v67_single.py)
+[![Version](https://img.shields.io/badge/version-3.3-blue.svg)](file:///C:/Alpaca_Algo2.0/Single_Buy2.0/rajat_alpha_v67_single.py)
 [![Status](https://img.shields.io/badge/status-production--ready-green.svg)](file:///C:/Alpaca_Algo2.0/Single_Buy2.0/config/config.json)
 [![Target](https://img.shields.io/badge/target-30%25%2B%20YoY%20Return-brightgreen.svg)](file:///C:/Alpaca_Algo2.0/Single_Buy2.0/README.md)
 [![Python](https://img.shields.io/badge/python-3.10%2B-blue.svg)](file:///C:/Alpaca_Algo2.0/Single_Buy2.0/requirements.txt)
@@ -409,7 +409,7 @@ C:\Alpaca_Algo2.0\Single_Buy2.0\
 │   ├── risk_management/              # Value at Risk (VaR) calculator engine
 │   └── ui_dashboard/                 # Enterprise Flask UI dashboard
 │
-└── tests/                             # Automated test suites (31 unit tests)
+└── tests/                             # Automated test suites (51 unit tests)
     ├── README.md                      # Test suite documentation & run commands
     ├── test_v32_upgrades.py           # v3.2 institutional logic & risk tests
     ├── test_bot.py                    # Main bot engine & database tests
@@ -417,3 +417,34 @@ C:\Alpaca_Algo2.0\Single_Buy2.0\
 
 ---
 *Maintained by Institutional Quantitative Engineering Team. Licensed for Private Client Swing Trading.*
+
+
+---
+
+## 🏛️ Version 3.3 Institutional Enhancements (October 2026)
+
+### 1. Smart Order Execution Engine (SOEE) 3-Step Escalation Ladder
+* **Step 1 (Passive Midpoint Peg)**: Calculates exact midpoint from SIP feed (`(Bid + Ask) / 2`). Polls broker up to `soee_step_timeout_seconds` (15s).
+* **Step 2 (Marketable Step-Up)**: If unfilled, cancels Step 1 and places a stepped-up limit order pegged closer to the ask (`Ask - $0.01` or `Mid + 25% spread`).
+* **Step 3 (Market Fallback or Clean Abort)**: If still unfilled and spread is tight ($\le 0.15\%$), submits a market order. If spread is wide, **cleanly cancels with zero database entry written**.
+
+### 2. Strict Broker Fill Confirmation Handshake (Zero Phantom Position Guarantee)
+* Eliminates the "Fire-and-Forget" submission bug: Position records are **NEVER inserted into `positions.db` upon order submission**.
+* The bot polls Alpaca order status until `OrderStatus.FILLED`. Only upon confirmed execution are the actual fill price (`filled_avg_price`) and filled shares (`filled_qty`) recorded in the database.
+* Unfilled, canceled, expired, or rejected orders leave **zero trace** in `positions.db`, guaranteeing complete immunity from phantom positions.
+
+### 3. Automated Broker State Reconciliation (`reconcile_positions_with_broker`)
+* Executes at bot startup and at the beginning of every `run_sell_guardian()` cycle.
+* Queries live Alpaca broker positions via `trading_client.get_all_positions()`.
+* If a position is marked `OPEN` in SQLite but Alpaca holds 0 shares (e.g. from an externally canceled limit order), the bot immediately flags it as a **Phantom Ghost Position**, marks status `'CANCELLED_UNFILLED'`, and prevents Sell Guardian from attempting an unintended **naked short sale**.
+
+### 4. Institutional Multi-Tier Composite Priority Score ($CPS$) Tie-Breaking
+When multiple candidates qualify on the same day with equal score (e.g. 4.0/7.0) and portfolio capacity is limited, the bot deterministically sorts candidates via:
+$$	ext{CPS} = (	ext{Base Score Norm} 	imes 0.30) + (	ext{Candle Wt} 	imes 0.25) + (	ext{RVol Score} 	imes 0.20) + (	ext{MA Momentum} 	imes 0.15) + (	ext{RS Norm} 	imes 0.10)$$
+* **Candlestick Reversal Win-Rate Weight**: Bullish Engulfing ($1.00$) > Piercing ($0.90$) > Hammer ($0.80$) > Tweezer ($0.75$) > Touch-Only ($0.40$).
+* **Institutional Volume Surge Ratio ($	ext{RVol}$)**: $	ext{Volume} / 	ext{VOL\_SMA21}$. $\ge 2.0	imes$ gets top priority; sub-1.0x retail churn is penalized.
+* **Moving Average Momentum**: 21 EMA accelerating upward slope (+1.5% to +3.5%) + positive 50 SMA slope + proximity to 21 EMA ($\le 1.0\%$).
+* **Deterministic Liquidity Tie-Breaker**: Highest Average Daily Dollar Volume ($	ext{ADV}_{21} 	imes 	ext{Price}$) breaks any remaining fractional tie.
+
+### 5. Automated Zero-Quantity Ghost Position Auto-Closure
+* In `PositionDatabase.add_partial_exit()`, when partial exits reduce `remaining_qty` to 0, the position is automatically updated to `status = 'CLOSED'` with `exit_reason = 'Partial Exits Complete'`.

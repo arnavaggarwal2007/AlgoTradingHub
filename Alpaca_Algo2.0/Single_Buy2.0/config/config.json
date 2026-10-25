@@ -28,7 +28,8 @@
     "max_allocation_per_stock_pct": 0.06,
     "enable_swing_signals": true,
     "enable_21touch_signals": true,
-    "enable_50touch_signals": true
+    "enable_50touch_signals": true,
+    "enable_composite_priority_ranking": true
   },
   "order_execution": {
     "execution_mode": "smart_limit_ladder",
@@ -49,7 +50,7 @@
   },
   "candle_quality": {
     "enable_shooting_star_filter": true,
-    "max_upper_wick_ratio": 0.50,
+    "max_upper_wick_ratio": 0.5,
     "max_wick_to_body_ratio": 2.0
   },
   "pullback_validation": {
@@ -61,11 +62,31 @@
   },
   "pattern_config": {
     "enabled_patterns": {
-      "Engulfing": {"enable": true, "score_weight": 1.0, "tier": "A"},
-      "Piercing": {"enable": true, "score_weight": 1.0, "tier": "A"},
-      "Tweezer": {"enable": true, "score_weight": 0.8, "tier": "B"},
-      "Hammer": {"enable": true, "score_weight": 0.8, "tier": "B"},
-      "UpsideReversal": {"enable": true, "score_weight": 0.6, "tier": "C"}
+      "Engulfing": {
+        "enable": true,
+        "score_weight": 1.0,
+        "tier": "A"
+      },
+      "Piercing": {
+        "enable": true,
+        "score_weight": 1.0,
+        "tier": "A"
+      },
+      "Tweezer": {
+        "enable": true,
+        "score_weight": 0.8,
+        "tier": "B"
+      },
+      "Hammer": {
+        "enable": true,
+        "score_weight": 0.8,
+        "tier": "B"
+      },
+      "UpsideReversal": {
+        "enable": true,
+        "score_weight": 0.6,
+        "tier": "C"
+      }
     }
   },
   "strategy_params": {
@@ -86,10 +107,10 @@
     "ema_tolerance_pct": 0.025,
     "touch_min_stay_days": 5,
     "touch_lookback_months": 2,
-    "touch_min_body_pct": 0.40,
+    "touch_min_body_pct": 0.4,
     "touch_stalling_days_long": 3,
     "touch_stalling_days_short": 1,
-    "bullish_confirmation_min_body_ratio": 0.50,
+    "bullish_confirmation_min_body_ratio": 0.5,
     "bullish_confirmation_min_close_position": 0.67,
     "sma50_touch_max_volume_ratio": 1.0,
     "sma50_touch_min_wick_ratio": 0.35,
@@ -108,7 +129,7 @@
     "stepper_stage_1_sl_pct": -0.04,
     "stepper_stage_2_gain": 0.08,
     "stepper_stage_2_sl_pct": 0.01,
-    "stepper_stage_3_gain": 0.10,
+    "stepper_stage_3_gain": 0.1,
     "stepper_stage_3_sl_pct": 0.03,
     "trailing_ratchet_per_pct": 0.01,
     "stop_loss_evaluation": "daily_close_confirmed",
@@ -129,12 +150,12 @@
   "profit_taking": {
     "enable_partial_exits": true,
     "target_1_pct": 0.05,
-    "target_1_qty": 0.20,
-    "target_2_pct": 0.10,
+    "target_1_qty": 0.2,
+    "target_2_pct": 0.1,
     "target_2_qty": 0.25,
     "target_3_pct": 0.15,
     "target_3_qty": 0.25,
-    "runner_qty": 0.30,
+    "runner_qty": 0.3,
     "runner_exempt_from_tes": true
   },
   "first_hour_guard": {
@@ -143,7 +164,7 @@
     "guard_end_time": "10:30",
     "index_symbol": "SPY",
     "catastrophic_override_pct": -0.22,
-    "stock_gap_override_pct": -0.10,
+    "stock_gap_override_pct": -0.1,
     "suppress_sl": true,
     "suppress_tes": true,
     "allow_profit_exits": true,
@@ -151,7 +172,10 @@
   },
   "market_regime": {
     "enable_index_gate": true,
-    "index_symbols": ["SPY", "QQQ"],
+    "index_symbols": [
+      "SPY",
+      "QQQ"
+    ],
     "index_ma_period": 50,
     "index_above_sma_required": true
   },
@@ -176,11 +200,11 @@
     "rs_score_bonus_points": 0.5,
     "weights": {
       "price_rs": 0.25,
-      "volume_profile": 0.20,
+      "volume_profile": 0.2,
       "green_red_ratio": 0.15,
       "week52_position": 0.15,
-      "weekly_momentum": 0.10,
-      "earnings_quality": 0.10,
+      "weekly_momentum": 0.1,
+      "earnings_quality": 0.1,
       "fund_ownership": 0.05
     },
     "earnings_data": {}
@@ -192,7 +216,12 @@
     "signal_monitoring_minutes": 30,
     "top_n_trades": 5,
     "default_interval_seconds": 120,
-    "last_hour_interval_seconds": 60
+    "last_hour_interval_seconds": 60,
+    "data_feed": "sip",
+    "soee_step_timeout_seconds": 15,
+    "soee_max_spread_pct": 0.005,
+    "soee_allow_market_fallback": true,
+    "enable_broker_reconciliation": true
   },
   "manual_position_overrides": []
 }

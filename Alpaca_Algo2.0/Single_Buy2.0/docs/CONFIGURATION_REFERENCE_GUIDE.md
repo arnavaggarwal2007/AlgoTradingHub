@@ -290,3 +290,15 @@ All action strings and enum parameters are parsed with **case-insensitive normal
 3. Save the file.
 - **Impact**: The bot immediately updates MSFT's `stop_loss` in SQLite to $418.00 and logs the update in `audit.log`.
 
+
+
+### 11. V3.3 Smart Execution & Priority Ranking Parameters (`execution_schedule` & `trading_rules`)
+
+| Parameter | Type | Default | Recommended | Description |
+| :--- | :--- | :--- | :--- | :--- |
+| `data_feed` | string | `"sip"` | `"sip"` | Consolidated SIP feed preference. Automatically falls back to `"iex"` if account does not support SIP. |
+| `soee_step_timeout_seconds` | integer | `15` | `15` | Seconds to wait per SOEE ladder step for passive midpoint or marketable limit fill. |
+| `soee_max_spread_pct` | float | `0.005` | `0.005` | Maximum allowable spread (0.50%) to attempt SOEE limit order execution. |
+| `soee_allow_market_fallback` | boolean | `true` | `true` | Allows Step 3 fallback to Market Buy if spread is ultra-tight ($\le 0.15\%$). If spread is wide, cleans aborts with zero DB entry. |
+| `enable_broker_reconciliation` | boolean | `true` | `true` | Live audit comparing SQLite DB against `trading_client.get_all_positions()`. Neutralizes phantom positions to prevent naked short sales. |
+| `enable_composite_priority_ranking` | boolean | `true` | `true` | Activates the 5-factor Composite Priority Score ($CPS$) to deterministically rank equal-score setups. |

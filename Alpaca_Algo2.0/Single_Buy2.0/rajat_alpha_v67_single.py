@@ -61,8 +61,9 @@ from alpaca.trading.requests import (
     GetOrdersRequest, 
     ReplaceOrderRequest
 )
-from alpaca.trading.enums import OrderSide, TimeInForce, QueryOrderStatus, OrderType
+from alpaca.trading.enums import OrderSide, TimeInForce, QueryOrderStatus, OrderType, OrderStatus
 from alpaca.data.historical import StockHistoricalDataClient
+from alpaca.data.enums import DataFeed
 from alpaca.data.requests import (
     StockBarsRequest, 
     StockLatestBarRequest, 
@@ -244,12 +245,28 @@ class PositionDatabase:
             )
         ''')
         
+        # Ensure quantitative analytics columns exist (Safe Auto-Migration)
+        for tbl, col, col_type in [
+            ("positions", "cps", "REAL"),
+            ("positions", "rvol", "REAL"),
+            ("positions", "candle_pattern", "TEXT"),
+            ("signal_history", "cps", "REAL"),
+            ("signal_history", "rvol", "REAL")
+        ]:
+            try:
+                cursor.execute(f"ALTER TABLE {tbl} ADD COLUMN {col} {col_type}")
+            except Exception:
+                pass
+
         self.conn.commit()
     
     def add_position(self, symbol: str, entry_price: float, quantity: int, 
                      stop_loss: float, score: float, pattern: str = 'Unknown',
                      initial_stop_loss: Optional[float] = None,
-                     rs_score: Optional[float] = None) -> int:
+                     rs_score: Optional[float] = None,
+                     cps: Optional[float] = None,
+                     rvol: Optional[float] = None,
+                     candle_pattern: Optional[str] = None) -> int:
         """Add new position to database with institutional metrics"""
         cursor = self.conn.cursor()
         init_sl = initial_stop_loss if initial_stop_loss is not None else stop_loss
@@ -257,10 +274,12 @@ class PositionDatabase:
             INSERT INTO positions (symbol, entry_date, entry_price, quantity, 
                                    remaining_qty, stop_loss, initial_stop_loss,
                                    score, pattern, highest_price_seen, sl_stage, 
-                                   is_runner, tes_extensions_count, rs_score)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, 0, 0, ?)
+                                   is_runner, tes_extensions_count, rs_score,
+                                   cps, rvol, candle_pattern)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, 0, 0, ?, ?, ?, ?)
         ''', (symbol, datetime.now().isoformat(), entry_price, quantity, 
-              quantity, stop_loss, init_sl, score, pattern, entry_price, rs_score))
+              quantity, stop_loss, init_sl, score, pattern, entry_price, rs_score,
+              cps, rvol, candle_pattern))
         self.conn.commit()
         return cursor.lastrowid
     
@@ -340,9 +359,46 @@ class PositionDatabase:
         
         cursor.execute('''
             UPDATE positions 
-            SET remaining_qty = remaining_qty - ?
+            SET remaining_qty = max(0, remaining_qty - ?)
             WHERE id = ?
         ''', (quantity, position_id))
+        
+        # Auto-close position if remaining quantity reaches 0 (Prevents zero-share ghost records)
+        cursor.execute('''
+            UPDATE positions 
+            SET status = 'CLOSED', 
+                exit_date = ?,
+                exit_price = ?,
+                exit_reason = 'Partial Exits Complete'
+            WHERE id = ? AND remaining_qty <= 0
+        ''', (datetime.now().isoformat(), exit_price, position_id))
+        self.conn.commit()
+
+    def update_position_status(self, position_id: int, status: str, exit_reason: Optional[str] = None):
+        """Update status and optional exit reason for a position (used for reconciliation)"""
+        cursor = self.conn.cursor()
+        if exit_reason:
+            cursor.execute('''
+                UPDATE positions 
+                SET status = ?, exit_reason = ?, exit_date = ?
+                WHERE id = ?
+            ''', (status, exit_reason, datetime.now().isoformat(), position_id))
+        else:
+            cursor.execute('''
+                UPDATE positions 
+                SET status = ?
+                WHERE id = ?
+            ''', (status, position_id))
+        self.conn.commit()
+
+    def update_position_quantity(self, position_id: int, new_qty: int):
+        """Update remaining_qty to reconcile with actual broker quantity"""
+        cursor = self.conn.cursor()
+        cursor.execute('''
+            UPDATE positions 
+            SET remaining_qty = ?
+            WHERE id = ?
+        ''', (new_qty, position_id))
         self.conn.commit()
     
     def close_position(self, position_id: int, exit_price: float, exit_reason: str):
@@ -393,12 +449,14 @@ class PositionDatabase:
         cursor = self.conn.cursor()
         cursor.execute('''
             INSERT INTO signal_history (symbol, signal_date, score, pattern, 
-                                        price, reason, executed, rs_score, candle_pattern)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                                        price, reason, executed, rs_score, candle_pattern,
+                                        cps, rvol)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ''', (symbol, datetime.now().isoformat(), signal_details.get('score', 0),
               signal_details.get('pattern', 'None'), signal_details.get('price', 0),
               signal_details.get('reason', ''), 1 if executed else 0,
-              signal_details.get('rs_score'), signal_details.get('candle_pattern')))
+              signal_details.get('rs_score'), signal_details.get('candle_pattern'),
+              signal_details.get('cps'), signal_details.get('rvol')))
         self.conn.commit()
     
     def count_trades_today(self) -> int:
@@ -501,8 +559,9 @@ class ConfigManager:
 class MarketDataFetcher:
     """Handles all market data retrieval, retry caching, and quote fetching"""
     
-    def __init__(self, data_client: StockHistoricalDataClient):
+    def __init__(self, data_client: StockHistoricalDataClient, feed: str = 'sip'):
         self.data_client = data_client
+        self.feed = feed or 'sip'
         self.cache = {}
         self.cache_expiry = {}
         self.last_valid_price = {}
@@ -575,18 +634,44 @@ class MarketDataFetcher:
         return self.last_valid_price.get(symbol)
 
     @with_api_retry(max_retries=3, base_delay=1.0)
-    def get_latest_quote(self, symbol: str) -> Optional[Dict]:
-        """Fetch current bid, ask, and midpoint quote for Smart Order Execution Engine"""
+    def get_latest_quote(self, symbol: str, current_price: Optional[float] = None) -> Optional[Dict]:
+        """Fetch current bid, ask, and midpoint quote with SIP consolidated preference and sanitization"""
         try:
-            params = StockLatestQuoteRequest(symbol_or_symbols=symbol)
-            quotes = self.data_client.get_stock_latest_quote(params)
-            if symbol in quotes and quotes[symbol] is not None:
-                quote = quotes[symbol]
+            quote = None
+            # 1. Attempt SIP Consolidated feed first
+            try:
+                feed_choice = DataFeed.SIP if self.feed == 'sip' else DataFeed.IEX
+                params = StockLatestQuoteRequest(symbol_or_symbols=symbol, feed=feed_choice)
+                quotes = self.data_client.get_stock_latest_quote(params)
+                if symbol in quotes and quotes[symbol] is not None:
+                    quote = quotes[symbol]
+            except Exception:
+                # 2. Fallback to IEX if SIP is unpermitted
+                try:
+                    params = StockLatestQuoteRequest(symbol_or_symbols=symbol, feed=DataFeed.IEX)
+                    quotes = self.data_client.get_stock_latest_quote(params)
+                    if symbol in quotes and quotes[symbol] is not None:
+                        quote = quotes[symbol]
+                except Exception:
+                    pass
+
+            if quote is not None:
                 bp = float(quote.bid_price)
                 ap = float(quote.ask_price)
-                if bp > 0 and ap > 0:
+                if bp > 0 and ap > 0 and ap >= bp:
                     mid = round((bp + ap) / 2.0, 2)
                     spread = round(ap - bp, 2)
+                    
+                    # Sanity guard against fragmented illiquid book quotes
+                    if current_price and current_price > 0:
+                        dev_pct = abs(mid - current_price) / current_price
+                        spread_pct = spread / mid if mid > 0 else 0
+                        if dev_pct > 0.02 or spread_pct > 0.03:
+                            logger.warning(
+                                f"[{symbol}] Distorted book detected: Mid ${mid:.2f} vs Market ${current_price:.2f} "
+                                f"({dev_pct*100:.1f}% dev, Spread: ${spread:.2f} | {spread_pct*100:.1f}%). Rejecting quote."
+                            )
+                            return None
                     return {'bid': bp, 'ask': ap, 'mid': mid, 'spread': spread}
         except Exception as e:
             logger.warning(f"[{symbol}] Failed to fetch live quote: {e}")
@@ -1314,10 +1399,33 @@ class RajatAlphaAnalyzer:
         if touch_found:
             signal_types.append('21Touch' if touch_type == "EMA21_Touch" else '50Touch')
             
+        # Multi-factor metrics for Institutional Composite Priority Scoring (CPS)
+        vol_sma21 = float(df_daily['volume'].iloc[-21:].mean()) if len(df_daily) >= 21 else float(df_daily['volume'].mean())
+        curr_vol = float(curr_candle['volume'])
+        rvol = round(curr_vol / vol_sma21, 2) if vol_sma21 > 0 else 1.0
+
+        ema21_now = float(df_daily['ema_21'].iloc[-1])
+        ema21_prev5 = float(df_daily['ema_21'].iloc[-6]) if len(df_daily) >= 6 else float(df_daily['ema_21'].iloc[0])
+        slope_21_pct = round(((ema21_now - ema21_prev5) / ema21_prev5) * 100.0, 2) if ema21_prev5 > 0 else 0.0
+
+        sma50_now = float(df_daily['sma_50'].iloc[-1])
+        sma50_prev20 = float(df_daily['sma_50'].iloc[-21]) if len(df_daily) >= 21 else float(df_daily['sma_50'].iloc[0])
+        slope_50_pct = round(((sma50_now - sma50_prev20) / sma50_prev20) * 100.0, 2) if sma50_prev20 > 0 else 0.0
+
+        dist_to_ema21_pct = round(abs(curr_price - ema21_now) / ema21_now * 100.0, 2) if ema21_now > 0 else 0.0
+        dollar_volume = float(curr_price * vol_sma21)
+        candle_weight = float(pat_weight) if pat_found else 0.40
+
         result['signal'] = True
         result['signal_types'] = signal_types
         result['pattern'] = '+'.join(signal_types) if signal_types else 'Touch-Only'
         result['price'] = curr_price
+        result['rvol'] = rvol
+        result['slope_21_pct'] = slope_21_pct
+        result['slope_50_pct'] = slope_50_pct
+        result['dist_to_ema21_pct'] = dist_to_ema21_pct
+        result['dollar_volume'] = dollar_volume
+        result['candle_weight'] = candle_weight
         result['reason'] = f"VALID BUY SIGNAL - Types:{result['pattern']} Score:{score:.1f} RS:{rs_score:.1f}"
         logger.info(f"[{symbol}] 🎯 FULL CRITERIA MET: Pattern: {result['pattern']} | Score: {score:.1f}/7.0 | IBD RS: {rs_score:.1f}/100 (Informational) | Price: ${curr_price:.2f}")
         return True, result
@@ -1500,10 +1608,39 @@ class PositionManager:
         # Fallback to fixed 17%
         return round(entry_price * (1.0 - max_pct), 4)
 
+    def _wait_for_order_fill(self, order_id: Any, symbol: str, timeout_seconds: int = 15, poll_interval: float = 1.0) -> Tuple[bool, Optional[Any]]:
+        """
+        Polls Alpaca trading client until order reaches FILLED or terminal state.
+        Returns (is_filled, filled_order_obj).
+        """
+        start_time = time.time()
+        oid = str(order_id)
+        last_status = None
+        while time.time() - start_time < timeout_seconds:
+            try:
+                order = self.trading_client.get_order_by_id(oid)
+                last_status = getattr(order, 'status', None)
+                status_val = last_status.value if hasattr(last_status, 'value') else str(last_status)
+                
+                if status_val == 'filled' or last_status == OrderStatus.FILLED:
+                    logger.info(f"[{symbol}] ✅ BROKER FILL CONFIRMED: Order ID {oid} filled {order.filled_qty} shares @ ${float(order.filled_avg_price or 0):.2f}")
+                    return True, order
+                    
+                if status_val in ['canceled', 'expired', 'rejected']:
+                    logger.warning(f"[{symbol}] Broker order {oid} reached terminal state: {status_val}")
+                    return False, order
+            except Exception as e:
+                logger.warning(f"[{symbol}] Error polling order status for ID {oid}: {e}")
+                
+            time.sleep(poll_interval)
+            
+        logger.warning(f"[{symbol}] Order fill polling timed out after {timeout_seconds}s (Last status: {last_status})")
+        return False, None
+
     def execute_buy(self, symbol: str, signal_details: Dict) -> bool:
         """
-        Executes buy order via Smart Order Execution Engine (SOEE) Midpoint Limit Order
-        or Market Order depending on configuration
+        Executes buy order via 3-Step Smart Order Execution Engine (SOEE) Escalation Ladder
+        or Market Order, with strict Broker Fill Confirmation before any database persistence.
         """
         current_price = signal_details['price']
         score = signal_details.get('score', 4.0)
@@ -1517,51 +1654,130 @@ class PositionManager:
             return False
             
         use_smart_soee = self.config.get('execution_schedule', 'enable_smart_execution', True)
-        quote = self.data_fetcher.get_latest_quote(symbol) if use_smart_soee else None
+        quote = self.data_fetcher.get_latest_quote(symbol, current_price=current_price) if use_smart_soee else None
+        
+        step_timeout = int(self.config.get('execution_schedule', 'soee_step_timeout_seconds', 15))
+        filled_order = None
         
         try:
-            if quote and quote['mid'] > 0:
-                limit_px = quote['mid']
-                order_request = LimitOrderRequest(
+            if use_smart_soee and quote and quote.get('mid', 0) > 0 and quote.get('spread', 0) > 0:
+                mid_px = quote['mid']
+                spread = quote['spread']
+                ask_px = quote['ask']
+                
+                # --- STEP 1: Passive Midpoint Peg ---
+                logger.info(f"[{symbol}] [SOEE Step 1] Submitting Midpoint Limit Buy: {shares} shares @ ${mid_px:.2f} (Spread: ${spread:.2f})")
+                req1 = LimitOrderRequest(
                     symbol=symbol,
                     qty=shares,
-                    limit_price=limit_px,
+                    limit_price=mid_px,
                     side=OrderSide.BUY,
                     time_in_force=TimeInForce.DAY
                 )
-                logger.info(f"[{symbol}] SOEE Midpoint Limit Order submitted: {shares} shares @ ${limit_px:.2f} (Spread: ${quote['spread']:.2f})")
+                ord1 = self.trading_client.submit_order(req1)
+                is_filled, ord1_status = self._wait_for_order_fill(ord1.id, symbol, timeout_seconds=step_timeout)
+                
+                if is_filled and ord1_status:
+                    filled_order = ord1_status
+                else:
+                    # Cancel Step 1 order
+                    try:
+                        self.trading_client.cancel_order_by_id(ord1.id)
+                        logger.info(f"[{symbol}] [SOEE Step 1] Unfilled after {step_timeout}s. Cancelled order ID {ord1.id}.")
+                    except Exception as ce:
+                        logger.warning(f"[{symbol}] Error cancelling Step 1 order: {ce}")
+                    time.sleep(1.0)
+                    
+                    # --- STEP 2: Marketable Step-Up ---
+                    step2_px = round(min(ask_px, mid_px + (spread * 0.25)), 2)
+                    logger.info(f"[{symbol}] [SOEE Step 2] Submitting Stepped-Up Limit Buy: {shares} shares @ ${step2_px:.2f}")
+                    req2 = LimitOrderRequest(
+                        symbol=symbol,
+                        qty=shares,
+                        limit_price=step2_px,
+                        side=OrderSide.BUY,
+                        time_in_force=TimeInForce.DAY
+                    )
+                    ord2 = self.trading_client.submit_order(req2)
+                    is_filled2, ord2_status = self._wait_for_order_fill(ord2.id, symbol, timeout_seconds=step_timeout)
+                    
+                    if is_filled2 and ord2_status:
+                        filled_order = ord2_status
+                    else:
+                        # Cancel Step 2 order
+                        try:
+                            self.trading_client.cancel_order_by_id(ord2.id)
+                            logger.info(f"[{symbol}] [SOEE Step 2] Unfilled after {step_timeout}s. Cancelled order ID {ord2.id}.")
+                        except Exception as ce:
+                            logger.warning(f"[{symbol}] Error cancelling Step 2 order: {ce}")
+                        time.sleep(1.0)
+                        
+                        # --- STEP 3: Fallback Market Order or Clean Abort ---
+                        allow_mkt = self.config.get('execution_schedule', 'soee_allow_market_fallback', True)
+                        spread_pct = spread / current_price if current_price > 0 else 0.0
+                        if allow_mkt and spread_pct <= 0.0020:
+                            logger.info(f"[{symbol}] [SOEE Step 3] Tight spread ({spread_pct*100:.2f}%). Submitting Market Order fallback: {shares} shares.")
+                            req3 = MarketOrderRequest(
+                                symbol=symbol,
+                                qty=shares,
+                                side=OrderSide.BUY,
+                                time_in_force=TimeInForce.DAY
+                            )
+                            ord3 = self.trading_client.submit_order(req3)
+                            is_filled3, ord3_status = self._wait_for_order_fill(ord3.id, symbol, timeout_seconds=10)
+                            if is_filled3 and ord3_status:
+                                filled_order = ord3_status
+                        else:
+                            logger.warning(f"[{symbol}] [SOEE] Order escalation completed without fill. Spread {spread_pct*100:.2f}% too wide for market order. Cleanly aborting buy with zero DB entry.")
+                            return False
             else:
-                order_request = MarketOrderRequest(
+                # Direct Market Order if SOEE is disabled or quote is unavailable
+                logger.info(f"[{symbol}] Market Buy Order submitted: {shares} shares @ ~${current_price:.2f}")
+                ord_mkt = self.trading_client.submit_order(MarketOrderRequest(
                     symbol=symbol,
                     qty=shares,
                     side=OrderSide.BUY,
                     time_in_force=TimeInForce.DAY
-                )
-                logger.info(f"[{symbol}] Market Buy Order submitted: {shares} shares @ ~${current_price:.2f}")
-
-            order = self.trading_client.submit_order(order_request)
+                ))
+                is_mkt_filled, ord_mkt_status = self._wait_for_order_fill(ord_mkt.id, symbol, timeout_seconds=15)
+                if is_mkt_filled and ord_mkt_status:
+                    filled_order = ord_mkt_status
+                else:
+                    logger.warning(f"[{symbol}] Market Buy Order not confirmed filled. Cleanly aborting buy with zero DB entry.")
+                    return False
+                    
+            if not filled_order:
+                logger.warning(f"[{symbol}] Buy execution failed: No filled order received from Alpaca. Zero DB entry.")
+                return False
+                
+            # Extract actual filled average price and filled quantity from Alpaca
+            actual_fill_price = float(getattr(filled_order, 'filled_avg_price', None) or current_price)
+            actual_fill_qty = int(getattr(filled_order, 'filled_qty', None) or shares)
             
             position_id = self.db.add_position(
                 symbol=symbol,
-                entry_price=current_price,
-                quantity=shares,
+                entry_price=actual_fill_price,
+                quantity=actual_fill_qty,
                 stop_loss=stop_loss,
                 score=score,
                 pattern=signal_details.get('pattern', 'Unknown'),
                 initial_stop_loss=stop_loss,
-                rs_score=signal_details.get('rs_score', 50.0)
+                rs_score=signal_details.get('rs_score', 50.0),
+                cps=signal_details.get('cps'),
+                rvol=signal_details.get('rvol'),
+                candle_pattern=signal_details.get('candle_pattern')
             )
             self.daily_buys.append({
                 'symbol': symbol,
-                'price': current_price,
-                'shares': shares,
+                'price': actual_fill_price,
+                'shares': actual_fill_qty,
                 'stop_loss': stop_loss,
                 'pattern': signal_details.get('pattern', 'Unknown'),
                 'score': score,
                 'rs_score': signal_details.get('rs_score', 50.0),
                 'time': datetime.now().strftime('%H:%M:%S ET')
             })
-            logger.info(f"[{symbol}] Position established in DB (ID: {position_id}, SL: ${stop_loss:.2f})")
+            logger.info(f"[{symbol}] ✅ CONFIRMED BROKER FILL: {actual_fill_qty} shares @ ${actual_fill_price:.2f}. Established in DB (ID: {position_id}, SL: ${stop_loss:.2f})")
             return True
         except Exception as e:
             logger.error(f"[{symbol}] Buy execution failed: {e}")
@@ -1726,7 +1942,11 @@ class PositionManager:
         return exits_to_execute
 
     def execute_partial_exit(self, position: Dict, target_name: str, quantity: int, current_price: float):
-        """Execute partial exit using SOEE midpoint limit order and activate runner mode if PT3 reached"""
+        """
+        Execute partial exit using strict Broker Fill Confirmation Handshake:
+        Submits SOEE midpoint limit sell -> waits for fill -> escalates to market sell fallback if unfilled ->
+        only records in DB upon confirmed broker execution with actual filled price and filled quantity.
+        """
         symbol = position['symbol']
         if quantity > position['remaining_qty'] or quantity <= 0:
             return
@@ -1734,9 +1954,11 @@ class PositionManager:
         logger.info(f"[{symbol}] Executing Partial Exit {target_name}: {quantity} shares @ ${current_price:.2f}")
         try:
             use_smart_soee = self.config.get('execution_schedule', 'enable_smart_execution', True)
-            quote = self.data_fetcher.get_latest_quote(symbol) if use_smart_soee else None
+            quote = self.data_fetcher.get_latest_quote(symbol, current_price=current_price) if use_smart_soee else None
+            step_timeout = int(self.config.get('execution_schedule', 'soee_step_timeout_seconds', 15))
+            filled_order = None
             
-            if quote and quote['mid'] > 0:
+            if quote and quote.get('mid', 0) > 0 and quote.get('spread', 0) > 0:
                 limit_px = quote['mid']
                 order_request = LimitOrderRequest(
                     symbol=symbol,
@@ -1745,39 +1967,76 @@ class PositionManager:
                     side=OrderSide.SELL,
                     time_in_force=TimeInForce.DAY
                 )
-                logger.info(f"[{symbol}] SOEE Midpoint Limit Sell submitted: {quantity} shares @ ${limit_px:.2f} (Spread: ${quote['spread']:.2f})")
+                logger.info(f"[{symbol}] [SOEE Partial Exit Step 1] Midpoint Limit Sell: {quantity} shares @ ${limit_px:.2f} (Spread: ${quote['spread']:.2f})")
+                ord1 = self.trading_client.submit_order(order_request)
+                is_filled1, ord1_status = self._wait_for_order_fill(ord1.id, symbol, timeout_seconds=step_timeout)
+                
+                if is_filled1 and ord1_status:
+                    filled_order = ord1_status
+                else:
+                    # Cancel Step 1 unfilled limit order
+                    try:
+                        self.trading_client.cancel_order_by_id(ord1.id)
+                        logger.info(f"[{symbol}] [SOEE Partial Exit Step 1] Unfilled after {step_timeout}s. Cancelled order ID {ord1.id}.")
+                    except Exception as ce:
+                        logger.warning(f"[{symbol}] Error cancelling partial exit limit sell: {ce}")
+                    time.sleep(1.0)
+                    
+                    # Step 2: Fallback to Market Sell
+                    allow_mkt = self.config.get('execution_schedule', 'soee_allow_market_fallback', True)
+                    if allow_mkt:
+                        logger.info(f"[{symbol}] [SOEE Partial Exit Step 2] Submitting Market Sell fallback: {quantity} shares.")
+                        mkt_ord = self.trading_client.submit_order(MarketOrderRequest(
+                            symbol=symbol,
+                            qty=quantity,
+                            side=OrderSide.SELL,
+                            time_in_force=TimeInForce.DAY
+                        ))
+                        is_mkt_filled, mkt_status = self._wait_for_order_fill(mkt_ord.id, symbol, timeout_seconds=15)
+                        if is_mkt_filled and mkt_status:
+                            filled_order = mkt_status
             else:
-                order_request = MarketOrderRequest(
+                # Direct Market Sell
+                logger.info(f"[{symbol}] Market Sell submitted: {quantity} shares @ ~${current_price:.2f}")
+                mkt_ord = self.trading_client.submit_order(MarketOrderRequest(
                     symbol=symbol,
                     qty=quantity,
                     side=OrderSide.SELL,
                     time_in_force=TimeInForce.DAY
-                )
-                logger.info(f"[{symbol}] Market Sell submitted: {quantity} shares @ ~${current_price:.2f}")
+                ))
+                is_mkt_filled, mkt_status = self._wait_for_order_fill(mkt_ord.id, symbol, timeout_seconds=15)
+                if is_mkt_filled and mkt_status:
+                    filled_order = mkt_status
+                    
+            if not filled_order:
+                logger.warning(f"[{symbol}] Partial exit {target_name} failed: No confirmed broker fill from Alpaca. Zero DB modification.")
+                return
 
-            self.trading_client.submit_order(order_request)
+            actual_exit_px = float(getattr(filled_order, 'filled_avg_price', None) or current_price)
+            actual_exit_qty = int(getattr(filled_order, 'filled_qty', None) or quantity)
             
-            profit_pct = (current_price - position['entry_price']) / position['entry_price'] * 100
-            self.db.add_partial_exit(position['id'], quantity, current_price, target_name, profit_pct)
+            profit_pct = (actual_exit_px - position['entry_price']) / position['entry_price'] * 100
+            self.db.add_partial_exit(position['id'], actual_exit_qty, actual_exit_px, target_name, profit_pct)
             self.daily_exits.append({
                 'symbol': symbol,
                 'exit_type': f'Partial {target_name}',
-                'qty': quantity,
-                'exit_price': current_price,
+                'qty': actual_exit_qty,
+                'exit_price': actual_exit_px,
                 'profit_pct': profit_pct,
                 'reason': f'Profit Target {target_name}',
                 'time': datetime.now().strftime('%H:%M:%S ET')
             })
+            logger.info(f"[{symbol}] ✅ CONFIRMED BROKER PARTIAL EXIT: {actual_exit_qty} shares @ ${actual_exit_px:.2f} ({target_name}, P/L: {profit_pct:+.2f}%)")
             
             # Check if Target 3 executed -> Activate Runner Mode
             if target_name == 'PT3':
                 self.db.set_runner_mode(position['id'])
-                logger.info(f"[{symbol}] 🚀 RUNNER MODE ACTIVATED: Remaining 30% position exempt from TES; trailing 1:1.")
+                logger.info(f"[{symbol}] 🚀 RUNNER MODE ACTIVATED: Remaining position exempt from TES; trailing 1:1.")
                 
-            # Bug 1 Guard: Clean close if remaining is 0
+            # Clean close if remaining is 0
             refreshed = self.db.get_position_by_id(position['id'])
             if refreshed and refreshed['remaining_qty'] <= 0:
-                self.db.close_position(position['id'], current_price, "Partial Exits Complete")
+                self.db.close_position(position['id'], actual_exit_px, "Partial Exits Complete")
                 logger.info(f"[{symbol}] Position cleanly closed in DB after partial exits.")
         except Exception as e:
             logger.error(f"[{symbol}] Partial exit {target_name} failed: {e}")
@@ -1815,19 +2074,43 @@ class PositionManager:
                 order_desc = "Emergency Market Sell" if is_emergency else "Market Sell"
                 logger.info(f"[{symbol}] {order_desc} submitted: {remaining} shares @ ~${current_price:.2f}")
 
-            self.trading_client.submit_order(order_request)
-            self.db.close_position(position['id'], current_price, reason)
-            profit_pct = (current_price - position['entry_price']) / position['entry_price'] * 100
+            order = self.trading_client.submit_order(order_request)
+            is_filled, filled_ord = self._wait_for_order_fill(order.id, symbol, timeout_seconds=15)
+            
+            # If limit sell was unfilled, cancel and submit market sell
+            if not is_filled and quote:
+                try:
+                    self.trading_client.cancel_order_by_id(order.id)
+                except Exception:
+                    pass
+                time.sleep(1.0)
+                mkt_req = MarketOrderRequest(symbol=symbol, qty=remaining, side=OrderSide.SELL, time_in_force=TimeInForce.DAY)
+                mkt_ord = self.trading_client.submit_order(mkt_req)
+                is_mkt_filled, mkt_filled_ord = self._wait_for_order_fill(mkt_ord.id, symbol, timeout_seconds=15)
+                if is_mkt_filled:
+                    filled_ord = mkt_filled_ord
+                    
+            if not filled_ord or not is_filled:
+                logger.critical(
+                    f"[{symbol}] 🚨 FULL EXIT FAILED: Order not confirmed filled on Alpaca broker! "
+                    f"Retaining position in DB as OPEN so Sell Guardian can retry next cycle without orphaning shares."
+                )
+                return False
+
+            actual_exit_px = float(getattr(filled_ord, 'filled_avg_price', None) or current_price)
+            self.db.close_position(position['id'], actual_exit_px, reason)
+            profit_pct = (actual_exit_px - position['entry_price']) / position['entry_price'] * 100
             self.daily_exits.append({
                 'symbol': symbol,
                 'exit_type': 'Full Exit',
                 'qty': remaining,
-                'exit_price': current_price,
+                'exit_price': actual_exit_px,
                 'profit_pct': profit_pct,
                 'reason': reason,
                 'time': datetime.now().strftime('%H:%M:%S ET')
             })
-            logger.info(f"[{symbol}] Position CLOSED in DB (P/L: {profit_pct:+.2f}%)")
+            logger.info(f"[{symbol}] ✅ CONFIRMED BROKER EXIT: Position CLOSED in DB (Exit: ${actual_exit_px:.2f}, P/L: {profit_pct:+.2f}%)")
+            return True
         except Exception as e:
             logger.error(f"[{symbol}] Full exit failed: {e}")
 
@@ -1904,15 +2187,76 @@ class SignalQueue:
             'symbols': list(self.signals.keys())
         }
     
+    @staticmethod
+    def calculate_composite_priority_score(details: Dict) -> float:
+        """
+        Calculates Institutional Composite Priority Score (CPS) for deterministic candidate ranking:
+        CPS = (Base_Score_Norm * 0.30) + 
+              (Candle_Weight * 0.25) + 
+              (RVol_Score * 0.20) + 
+              (MA_Momentum_Score * 0.15) + 
+              (RS_Score_Norm * 0.10)
+        """
+        raw_score = float(details.get('score', 4.0))
+        base_score_norm = min(1.0, max(0.0, (raw_score - 4.0) / 3.0)) # 4.0 -> 0.0, 7.0 -> 1.0
+        
+        candle_weight = float(details.get('candle_weight', 0.40))
+        
+        rvol = float(details.get('rvol', 1.0))
+        if rvol >= 2.0:
+            rvol_score = 1.0
+        elif rvol >= 1.5:
+            rvol_score = 0.8
+        elif rvol >= 1.0:
+            rvol_score = 0.5
+        else:
+            rvol_score = max(0.0, rvol * 0.5)
+            
+        slope_21 = float(details.get('slope_21_pct', 0.0))
+        slope_50 = float(details.get('slope_50_pct', 0.0))
+        dist_21 = float(details.get('dist_to_ema21_pct', 0.0))
+        
+        ma_score = 0.5
+        if slope_21 > 0:
+            ma_score += 0.25
+        if slope_50 >= 0:
+            ma_score += 0.15
+        else:
+            ma_score -= 0.20
+        if dist_21 <= 1.5:
+            ma_score += 0.10
+        elif dist_21 > 3.0:
+            ma_score -= 0.10
+        ma_score = min(1.0, max(0.0, ma_score))
+        
+        rs_raw = float(details.get('rs_score', 50.0))
+        rs_norm = min(1.0, max(0.0, rs_raw / 100.0))
+        
+        cps = (base_score_norm * 0.30) + (candle_weight * 0.25) + (rvol_score * 0.20) + (ma_score * 0.15) + (rs_norm * 0.10)
+        return round(cps, 4)
+
     def get_top_signals(self, analyzer: RajatAlphaAnalyzer) -> List[Tuple[str, Dict]]:
         valid_signals = []
         for symbol, details in self.signals.items():
             valid, updated_details = analyzer.analyze_entry_signal(symbol)
             if valid:
+                updated_details['cps'] = self.calculate_composite_priority_score(updated_details)
                 valid_signals.append((symbol, updated_details))
                 
-        # Sort by Score DESC, RS Score DESC
-        valid_signals.sort(key=lambda x: (x[1].get('score', 0), x[1].get('rs_score', 0)), reverse=True)
+        # Institutional Multi-Tier Deterministic Sort:
+        # 1. Composite Priority Score (CPS) DESC
+        # 2. Base Score DESC
+        # 3. IBD RS Composite DESC
+        # 4. Average Daily Dollar Volume DESC (Absolute Liquidity)
+        valid_signals.sort(
+            key=lambda x: (
+                x[1].get('score', 0.0),        # 1. Primary: Conviction Score (e.g. 5.0 > 4.5 > 4.0)
+                x[1].get('cps', 0.0),          # 2. Secondary: Institutional CPS breaks ties on equal score
+                x[1].get('rs_score', 0.0),     # 3. Tertiary: IBD RS Rating
+                x[1].get('dollar_volume', 0.0) # 4. Quaternary: Dollar Volume Liquidity
+            ),
+            reverse=True
+        )
         return valid_signals[:self.top_n]
     
     def reset(self):
@@ -1935,10 +2279,11 @@ class RajatAlphaTradingBot:
         base_url = self.config.get('api', 'base_url')
         self.is_paper = 'paper' in base_url
         
+        feed_pref = self.config.get('execution_schedule', 'data_feed', 'sip')
         self.trading_client = TradingClient(api_key, secret_key, paper=self.is_paper)
         self.data_client = StockHistoricalDataClient(api_key, secret_key)
         
-        self.data_fetcher = MarketDataFetcher(self.data_client)
+        self.data_fetcher = MarketDataFetcher(self.data_client, feed=feed_pref)
         self.analyzer = RajatAlphaAnalyzer(self.config, self.data_fetcher)
         self.position_manager = PositionManager(self.trading_client, self.config, self.db, self.data_fetcher)
         
@@ -1955,8 +2300,25 @@ class RajatAlphaTradingBot:
         logger.info("RAJAT ALPHA V67 TRADING BOT INITIALIZED (VERSION 3.2)")
         logger.info(f"Mode: {'PAPER TRADING' if self.is_paper else 'LIVE TRADING'}")
         logger.info("=" * 80)
+        
+        # Initial Startup Broker State Reconciliation
+        if self.config.get('execution_schedule', 'enable_broker_reconciliation', True):
+            logger.info("⚡ Performing Initial Startup Broker Position Reconciliation...")
+            self.reconcile_positions_with_broker()
 
     def is_market_open(self) -> bool:
+        """
+        Timezone-neutral market hours check:
+        Primary: Queries live Alpaca Broker clock (100% immune to DST shifts, local host timezones, and holidays).
+        Fallback: Evaluates US/Eastern wall-clock (9:30 - 16:00 ET) with automatic pytz EST/EDT transitions.
+        """
+        try:
+            clock = self.trading_client.get_clock()
+            if clock and hasattr(clock, 'is_open'):
+                return bool(clock.is_open)
+        except Exception as e:
+            logger.debug(f"Could not query Alpaca clock: {e}. Falling back to US/Eastern wall-clock.")
+            
         now = datetime.now(pytz.timezone('US/Eastern'))
         if now.weekday() > 4: return False
         market_start = now.replace(hour=9, minute=30, second=0, microsecond=0)
@@ -2097,6 +2459,61 @@ class RajatAlphaTradingBot:
                 self.db.record_processed_override(override_id, pos['symbol'], pos['id'], action, current_px, pos['remaining_qty'], reason_note)
                 logger.info(f"[MANUAL OVERRIDE] Position {pos['id']} ({pos['symbol']}) TES extended (+{ext_days} days)")
 
+    def reconcile_positions_with_broker(self) -> int:
+        """
+        Reconciles local SQLite positions against live Alpaca broker positions.
+        Single Source of Truth (SSOT) is always Alpaca Broker.
+        Detects and safely resolves:
+        1. Phantom positions in DB where Alpaca holds 0 shares (prevents naked short selling).
+        2. Zero-quantity positions still marked 'OPEN'.
+        3. Quantity mismatches between DB and broker.
+        Returns number of reconciled discrepancies.
+        """
+        discrepancies = 0
+        try:
+            alpaca_positions = self.trading_client.get_all_positions()
+            broker_map = {}
+            for p in alpaca_positions:
+                try:
+                    broker_map[p.symbol] = float(p.qty)
+                except Exception:
+                    pass
+                    
+            db_positions = self.db.get_open_positions()
+            
+            for pos in db_positions:
+                sym = pos['symbol']
+                pos_id = pos['id']
+                db_qty = pos['remaining_qty']
+                broker_qty = broker_map.get(sym, 0.0)
+                
+                # Check 1: Ghost Position (DB has OPEN, but Alpaca holds 0 shares)
+                if broker_qty <= 0:
+                    discrepancies += 1
+                    logger.critical(
+                        f"[{sym}] 🚨 PHANTOM GHOST POSITION DETECTED! DB records {db_qty} shares OPEN (ID: {pos_id}), "
+                        f"but Alpaca account holds 0 shares! Reconciling to prevent unintended naked short sale."
+                    )
+                    self.db.update_position_status(
+                        pos_id, 
+                        'CANCELLED_UNFILLED', 
+                        exit_reason='Reconciled: No Broker Position'
+                    )
+                # Check 2: Quantity mismatch (partial fill or manual adjustment outside bot)
+                elif broker_qty < db_qty:
+                    discrepancies += 1
+                    logger.warning(
+                        f"[{sym}] Position quantity mismatch: DB records {db_qty} shares, "
+                        f"Alpaca holds {broker_qty} shares. Adjusting DB remaining_qty to match broker."
+                    )
+                    self.db.update_position_quantity(pos_id, int(broker_qty))
+                    
+            if discrepancies > 0:
+                logger.info(f"🛡️ Broker Reconciliation Complete: Resolved {discrepancies} position discrepancies.")
+        except Exception as e:
+            logger.error(f"Broker position reconciliation check failed: {e}")
+        return discrepancies
+
     def run_sell_guardian(self):
         """Monitors open positions for stop-loss, profit-taking, and structural TES"""
         open_positions = self.db.get_open_positions()
@@ -2226,17 +2643,21 @@ class RajatAlphaTradingBot:
                 for idx, (sym, det) in enumerate(top_signals, 1):
                     selected = (idx <= avail)
                     status_tag = "✅ SELECTED FOR POSITION" if selected else "⚠️ SKIPPED (Limit Reached)"
-                    logger.info(f"  {idx}. [{sym}] Score: {det.get('score')}/7.0 | IBD RS: {det.get('rs_score'):.1f} | Pattern: {det.get('pattern')} | Price: ${det.get('price'):.2f} -> {status_tag}")
+                    logger.info(f"  {idx}. [{sym}] CPS: {det.get('cps', 0.0):.4f} | Score: {det.get('score')}/7.0 | Candle: {det.get('candle_pattern')} (wt: {det.get('candle_weight', 0.4):.2f}) | RVol: {det.get('rvol', 1.0):.1f}x | Slopes: {det.get('slope_21_pct', 0.0):+.1f}%/{det.get('slope_50_pct', 0.0):+.1f}% | IBD RS: {det.get('rs_score'):.1f} | Price: ${det.get('price'):.2f} -> {status_tag}")
             else:
                 logger.info("No candidates maintained qualified status upon 30-min revalidation.")
             
-            for symbol, details in top_signals[:avail]:
+            executed_count = 0
+            for symbol, details in top_signals:
+                if executed_count >= avail:
+                    break
                 if self.config.get('trading_rules', 'prevent_same_day_reentry', True) and self.db.was_traded_today(symbol):
                     logger.warning(f"[{symbol}] Skipped buy execution: Traded earlier today (prevent_same_day_reentry).")
                     continue
                 if self.position_manager.execute_buy(symbol, details):
                     self.db.log_signal(symbol, details, executed=True)
                     logger.info(f"[{symbol}] 🚀 Order placed and position established in portfolio.")
+                    executed_count += 1
                     
             self.signal_queue.reset()
             return
@@ -2528,6 +2949,9 @@ class RajatAlphaTradingBot:
                         self.position_manager.daily_sl_steps.clear()
                         self.position_manager.daily_buys.clear()
                         self.position_manager.daily_exits.clear()
+                        logger.info("🔔 Market Open Transition: Performing Opening Bell Broker Position Reconciliation...")
+                        if self.config.get('execution_schedule', 'enable_broker_reconciliation', True):
+                            self.reconcile_positions_with_broker()
                         
                     self.run_sell_guardian()
                     self.run_buy_hunter()
@@ -2537,6 +2961,9 @@ class RajatAlphaTradingBot:
                 else:
                     now_et = datetime.now(pytz.timezone('US/Eastern'))
                     if not self.daily_snapshot_done and now_et.weekday() <= 4 and now_et.hour >= 16:
+                        logger.info("🔔 Market Close Transition: Performing End-of-Day Broker Position Reconciliation...")
+                        if self.config.get('execution_schedule', 'enable_broker_reconciliation', True):
+                            self.reconcile_positions_with_broker()
                         self.generate_daily_market_close_snapshot()
                         self.daily_snapshot_done = True
                     logger.info("Market closed. Sleeping 5 minutes...")

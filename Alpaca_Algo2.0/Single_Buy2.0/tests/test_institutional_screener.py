@@ -206,7 +206,7 @@ class TestInstitutionalScreenerV35:
                 'volume_surge_tag': 'YES (Green Pocket Pivot)', 'swing_higher_low': 'YES (SL2 >= SL1)',
                 'swing_contraction': 'YES (VCP)', 'sl1': 130.0, 'sl1_date': '2026-10-01', 'sl2': 136.0,
                 'sl2_date': '2026-10-15', 'sh1': 142.0, 'sh1_date': '2026-10-08', 'sh2': 144.0,
-                'sh2_date': '2026-10-20', 'rs_score': 94.5, 'iqs_score': 96, 'star_rating': '⭐⭐⭐⭐⭐ (Elite A+)',
+                'sh2_date': '2026-10-20', 'rs_score': 94.5, 'iqs_score': 96, 'grade': 'A+', 'star_rating': '⭐⭐⭐⭐⭐ (Elite A+)',
                 'action_verdict': 'PRIME BUY SETUP', 'suggested_entry': 140.50, 'initial_stop_loss': 132.00,
                 'risk_pct': 6.0, 'target_1': 147.53, 'target_2': 154.55, 'target_3': 161.58, 'risk_reward': 1.65
             },
@@ -221,7 +221,7 @@ class TestInstitutionalScreenerV35:
                 'volume_surge_tag': 'YES (Green Pocket Pivot)', 'swing_higher_low': 'YES (SL2 >= SL1)',
                 'swing_contraction': 'YES (VCP)', 'sl1': 41.0, 'sl1_date': '2026-10-02', 'sl2': 43.5,
                 'sl2_date': '2026-10-16', 'sh1': 46.5, 'sh1_date': '2026-10-10', 'sh2': 47.0,
-                'sh2_date': '2026-10-22', 'rs_score': 82.0, 'iqs_score': 88, 'star_rating': '⭐⭐⭐⭐ (Grade A High Conviction)',
+                'sh2_date': '2026-10-22', 'rs_score': 82.0, 'iqs_score': 88, 'grade': 'A', 'star_rating': '⭐⭐⭐⭐ (Grade A High Conviction)',
                 'action_verdict': 'HIGH WATCHLIST PRIORITY', 'suggested_entry': 43.80, 'initial_stop_loss': 40.75,
                 'risk_pct': 7.0, 'target_1': 45.99, 'target_2': 48.18, 'target_3': 50.37, 'risk_reward': 1.44
             }
@@ -248,7 +248,9 @@ class TestInstitutionalScreenerV35:
                 
             ws_txt = wb["Watchlist_TXT_Export"]
             assert ws_txt.cell(row=2, column=1).value == "NVDA"
+            assert ws_txt.cell(row=2, column=5).value == "A+"
             assert ws_txt.cell(row=3, column=1).value == "CELH"
+            assert ws_txt.cell(row=3, column=5).value == "A"
             wb.close()
         finally:
             if os.path.exists(temp_path):

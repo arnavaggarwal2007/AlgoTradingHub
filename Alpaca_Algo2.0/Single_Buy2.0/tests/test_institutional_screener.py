@@ -21,6 +21,7 @@ import pytest
 import numpy as np
 import pandas as pd
 import openpyxl
+import json
 import sys
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
@@ -273,3 +274,51 @@ class TestInstitutionalScreenerV35:
         finally:
             if os.path.exists(txt_path):
                 os.remove(txt_path)
+
+    def test_colab_kernelspec_and_interactive_charting(self):
+        """Verify notebooks have proper kernelspec metadata and interactive widgets"""
+        screener_nb_path = os.path.join(
+            os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+            "scripts", "colab", "Rajat_Alpha_Institutional_Weekly_Screener.ipynb"
+        )
+        assert os.path.exists(screener_nb_path)
+        with open(screener_nb_path, "r", encoding="utf-8") as f:
+            nb = json.load(f)
+            
+        # Verify kernelspec prevents 'no runtime environment configured' error
+        assert "kernelspec" in nb["metadata"]
+        assert nb["metadata"]["kernelspec"]["name"] == "python3"
+        
+        # Verify Step 6 has interactive dropdown inspector and top 10 auto-render
+        step6_source = "".join(nb["cells"][6]["source"])
+        assert "ipywidgets as widgets" in step6_source
+        assert "Dropdown" in step6_source
+        assert "plot_candlestick_chart" in step6_source
+        assert "min(10, len(stored_chart_data))" in step6_source or "top_candidates" in step6_source
+
+    def test_colab_master_suite_and_modular_structure(self):
+        """Verify Master Suite notebook exists and modular folders are intact"""
+        base_colab = os.path.join(
+            os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+            "scripts", "colab"
+        )
+        master_nb_path = os.path.join(base_colab, "Rajat_Alpha_Master_Trading_Suite.ipynb")
+        assert os.path.exists(master_nb_path)
+        with open(master_nb_path, "r", encoding="utf-8") as f:
+            mnb = json.load(f)
+        assert "kernelspec" in mnb["metadata"]
+        assert mnb["metadata"]["kernelspec"]["name"] == "python3"
+        
+        expected_modules = [
+            "00_master_suite",
+            "01_weekly_screener",
+            "02_swing_backtest",
+            "03_institutional_prop_protocol",
+            "04_scanned_watchlist_backtest",
+            "05_reference_simulations"
+        ]
+        for m in expected_modules:
+            mod_dir = os.path.join(base_colab, m)
+            assert os.path.isdir(mod_dir)
+            assert os.path.exists(os.path.join(mod_dir, "README.md"))
+

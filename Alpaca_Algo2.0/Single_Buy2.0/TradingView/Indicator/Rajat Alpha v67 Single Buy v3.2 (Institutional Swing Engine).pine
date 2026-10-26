@@ -8,7 +8,7 @@ indicator("Rajat Alpha v67 Single Buy v3.2 (Institutional Swing Engine)", overla
 // Senior Pine Script Quantitative Architecture — Fully Synchronized with rajat_alpha_v67_single.py (v3.2)
 //
 // 1. INSTITUTIONAL 8-STAGE GATING ARCHITECTURE:
-//    - [Gate 0] Market Regime Filter: SPY & QQQ structural health (> 50 SMA)
+//    - [Gate 0] Market Regime Filter: SPY & QQQ structural health (> Benchmark SMA)
 //    - [Gate 1 & 1.5] Market Structure: 50 SMA > 200 SMA, Close > 200 SMA, 21 EMA >= 50 SMA - 2.5% tolerance
 //    - [Gate 2] Minervini Stage-2 Impulse Wave: Peak >= EMA21 + 5% in last 20 bars & orderly pullback >= 3%
 //    - [Gate 3] Candlestick Reversal Recognition: 5 Tiered Patterns (Engulfing, Piercing, Hammer, Tweezer, Reversal)
@@ -50,7 +50,8 @@ qqq_ticker              = input.symbol("BATS:QQQ", "QQQ Benchmark ETF", group=gr
 enable_custom_bench     = input.bool(true, "Enable Custom Comparison Benchmark", group=grp_gen)
 custom_ticker           = input.symbol("AAPL", "Custom Comparison Symbol", group=grp_gen)
 min_listing_days        = input.int(200, "Minimum Listing Days (Maturity Filter)", minval=50, maxval=500, group=grp_gen)
-enable_market_regime    = input.bool(true, "Gate 0: Market Regime Filter (SPY & QQQ > 50 SMA)", group=grp_gen)
+enable_market_regime    = input.bool(true, "Gate 0: Market Regime Filter (SPY & QQQ > Benchmark SMA)", group=grp_gen)
+regime_ma_period        = input.int(50, "Gate 0 Benchmark SMA Lookback (e.g. 50, 200, 215)", minval=10, maxval=300, step=5, group=grp_gen, tooltip="Moving average lookback period for SPY & QQQ market regime filter (e.g. 50, 200, or 215). Must match config.json index_ma_period.")
 
 // --- Group: 8-Stage Gating Filters ---
 grp_gate = "2. Institutional 8-Stage Gating Filters"
@@ -188,13 +189,13 @@ sp_p    = request.security(spy_ticker, "D", (close - close[safe_lb]) / close[saf
 sec_p   = request.security(sector_ticker, "D", (close - close[safe_lb]) / close[safe_lb], lookahead=barmerge.lookahead_off)
 cust_p  = enable_custom_bench ? request.security(custom_ticker, "D", (close - close[safe_lb]) / close[safe_lb], lookahead=barmerge.lookahead_off) : na
 
-// Gate 0: Broad Market Regime Check (SPY & QQQ > 50 SMA)
+// Gate 0: Broad Market Regime Check (SPY & QQQ > Configured Benchmark SMA)
 spy_close = request.security(spy_ticker, "D", close[barstate.isrealtime ? 1 : 0], lookahead=barmerge.lookahead_off)
-spy_sma50 = request.security(spy_ticker, "D", ta.sma(close, 50)[barstate.isrealtime ? 1 : 0], lookahead=barmerge.lookahead_off)
+spy_sma   = request.security(spy_ticker, "D", ta.sma(close, regime_ma_period)[barstate.isrealtime ? 1 : 0], lookahead=barmerge.lookahead_off)
 qqq_close = request.security(qqq_ticker, "D", close[barstate.isrealtime ? 1 : 0], lookahead=barmerge.lookahead_off)
-qqq_sma50 = request.security(qqq_ticker, "D", ta.sma(close, 50)[barstate.isrealtime ? 1 : 0], lookahead=barmerge.lookahead_off)
+qqq_sma   = request.security(qqq_ticker, "D", ta.sma(close, regime_ma_period)[barstate.isrealtime ? 1 : 0], lookahead=barmerge.lookahead_off)
 
-market_regime_ok = not enable_market_regime or ((not na(spy_close) and not na(spy_sma50) ? spy_close > spy_sma50 : true) and (not na(qqq_close) and not na(qqq_sma50) ? qqq_close > qqq_sma50 : true))
+market_regime_ok = not enable_market_regime or ((not na(spy_close) and not na(spy_sma) ? spy_close > spy_sma : true) and (not na(qqq_close) and not na(qqq_sma) ? qqq_close > qqq_sma : true))
 
 // Institutional Demand Zone (DZ) & Supply Zone (SZ)
 low_21  = ta.lowest(low, 21)
@@ -368,6 +369,38 @@ if use_ibd_score_bonus and ibd_rs_rating >= ibd_bonus_threshold
     score += ibd_bonus_points
 
 // ------------------------------------------------------------------------------------------------
+// 7.5 INSTITUTIONAL COMPOSITE PRIORITY / TIEBREAKER SCORE (CPS)
+// Exact parity with Python SignalQueue.calculate_composite_priority_score()
+// CPS = (Base_Score_Norm * 0.30) + (Candle_Weight * 0.25) + (RVol_Score * 0.20) + (MA_Mom_Score * 0.15) + (RS_Norm * 0.10)
+// ------------------------------------------------------------------------------------------------
+base_score_norm = math.min(1.0, math.max(0.0, (score - 4.0) / 3.0))
+candle_weight   = pattern_weight
+
+rvol_val = not na(vol_sma21) and vol_sma21 > 0 ? (volume / vol_sma21) : 1.0
+rvol_score = rvol_val >= 2.0 ? 1.0 : rvol_val >= 1.5 ? 0.8 : rvol_val >= 1.0 ? 0.5 : math.max(0.0, rvol_val * 0.5)
+
+slope_21_val = not na(ema21[5]) and ema21[5] > 0 ? ((ema21 - ema21[5]) / ema21[5] * 100.0) : 0.0
+slope_50_val = not na(sma50[5]) and sma50[5] > 0 ? ((sma50 - sma50[5]) / sma50[5] * 100.0) : 0.0
+dist_21_val  = not na(ema21) and ema21 > 0 ? (math.abs(close - ema21) / ema21 * 100.0) : 0.0
+
+ma_mom_score = 0.5
+if slope_21_val > 0.0
+    ma_mom_score += 0.25
+if slope_50_val >= 0.0
+    ma_mom_score += 0.15
+else
+    ma_mom_score -= 0.20
+if dist_21_val <= 1.5
+    ma_mom_score += 0.10
+else if dist_21_val > 3.0
+    ma_mom_score -= 0.10
+ma_mom_score := math.min(1.0, math.max(0.0, ma_mom_score))
+
+rs_score_norm = not na(ibd_rs_rating) ? math.min(1.0, math.max(0.0, ibd_rs_rating / 100.0)) : 0.5
+
+tiebreaker_score = (base_score_norm * 0.30) + (candle_weight * 0.25) + (rvol_score * 0.20) + (ma_mom_score * 0.15) + (rs_score_norm * 0.10)
+
+// ------------------------------------------------------------------------------------------------
 // 8. DAILY EXECUTION CADENCE TRACKER & REJECTION AUDIT
 // ------------------------------------------------------------------------------------------------
 var int trades_executed_today = 0
@@ -397,7 +430,7 @@ rej_reason := ""
 
 if candidate_signal
     if not market_regime_ok
-        rej_reason := "REGIME (SPY/QQQ < 50)"
+        rej_reason := "REGIME (SPY/QQQ < " + str.tostring(regime_ma_period) + ")"
         rej_cnt_regime += 1
     else if is_shooting_star
         rej_reason := "SHOOTING_STAR"
@@ -570,15 +603,16 @@ if show_zones and barstate.islast
     box.new(left=bar_index - 21, top=high_21, right=bar_index + 5, bottom=high_21 * (1.0 - sz_tolerance_pct), bgcolor=color.new(#ffcdd2, 50), border_color=color.red, text="Institutional SZ (5.0%)", text_halign=text.align_right, text_size=size.tiny, text_color=color.black)
 
 // Tooltip Builder Function
-build_signal_tooltip(is_opp, p_score, p_ibd, p_name, p_entry, p_sl) =>
+build_signal_tooltip(is_opp, p_score, p_tb, p_ibd, p_name, p_entry, p_sl) =>
     hdr = is_opp ? "⚡ DISCRETIONARY MANUAL OPPORTUNITY (OPP)\n" + "Automated Single-Buy position already running. Use for manual discretionary entry.\n" : "🎯 INSTITUTIONAL BUY SIGNAL (B1) - VERIFIED v3.2\n"
     body = "========================================\n" +
            "Total Score: " + str.tostring(p_score, "#.#") + " / 7.0 (Min Req: " + str.tostring(min_score_req, "#.#") + ")\n" +
+           "Tiebreaker Score: " + str.tostring(p_tb, "#.####") + "\n" +
            "IBD RS Rating: " + str.tostring(p_ibd, "#.#") + " / 100\n" +
            "Pattern: " + p_name + "\n" +
            "----------------------------------------\n" +
            "FULFILLED CRITERIA BREAKDOWN:\n" +
-           (market_regime_ok ? "✓ [Gate 0] Market Regime (SPY & QQQ > 50 SMA)\n" : "✗ [Gate 0] Regime Failed\n") +
+           (market_regime_ok ? "✓ [Gate 0] Market Regime (SPY & QQQ > " + str.tostring(regime_ma_period) + " SMA)\n" : "✗ [Gate 0] Regime Failed\n") +
            (structure_ok ? "✓ [Gate 1] Structure (50 > 200 SMA, 21 >= 50 - 2.5%)\n" : "✗ [Gate 1] Structure Failed\n") +
            (s_perf > q_p ? "✓ Stock > QQQ Alpha (+1.0 pt)\n" : "- Stock <= QQQ Alpha (+0.0 pt)\n") +
            (weekly_ok ? "✓ Weekly MTF (Close > EMA21) (+1.0 pt)\n" : "- Weekly MTF Failed (+0.0 pt)\n") +
@@ -602,7 +636,7 @@ build_signal_tooltip(is_opp, p_score, p_ibd, p_name, p_entry, p_sl) =>
 // Primary Buy Signal Label (B1): Green Background, Prominent size
 if buy_action
     calculated_sl = pos_entry - math.max(pos_entry * min_sl_pct, math.min(pos_entry * max_sl_pct, atr_multiplier * atr14))
-    b1_tip = build_signal_tooltip(false, score, ibd_rs_rating, pattern_name, close, calculated_sl)
+    b1_tip = build_signal_tooltip(false, score, tiebreaker_score, ibd_rs_rating, pattern_name, close, calculated_sl)
     label_txt = "B1 (" + str.tostring(score, "#.#") + ")\n" + pattern_name
     label.new(bar_index, low, label_txt, color=color.green, textcolor=color.white, style=label.style_label_up, size=size.normal, tooltip=b1_tip)
 
@@ -614,13 +648,13 @@ if runner_add_signal
                      "A fresh institutional setup has qualified (Score: " + str.tostring(score, "#.#") + ").\n" +
                      "Existing runner stop is preserved without alteration.\n" +
                      "----------------------------------------\n" +
-                     build_signal_tooltip(false, score, ibd_rs_rating, pattern_name, close, pos_sl)
+                     build_signal_tooltip(false, score, tiebreaker_score, ibd_rs_rating, pattern_name, close, pos_sl)
     label.new(bar_index, low, "B1 (Add)\n" + str.tostring(score, "#.#") + "\n" + pattern_name, color=color.new(#00e676, 0), textcolor=color.black, style=label.style_label_up, size=size.normal, tooltip=runner_add_tip)
 
 // Opportunity Signals (↑OPP): Bright Yellow background with Black Text (Only when in non-runner position)
 if candidate_signal and is_valid_signal and in_position and not pos_is_runner and not buy_action
     opp_sl = close * (1.0 - fixed_sl_fallback_pct)
-    opp_tip = build_signal_tooltip(true, score, ibd_rs_rating, pattern_name, close, opp_sl)
+    opp_tip = build_signal_tooltip(true, score, tiebreaker_score, ibd_rs_rating, pattern_name, close, opp_sl)
     label.new(bar_index, low, "↑OPP\n" + str.tostring(score, "#.#"), color=color.new(#ffd700, 10), textcolor=color.black, style=label.style_arrowup, size=size.normal, tooltip=opp_tip)
 
 // Disqualified Signals (↓REJ): Compact badge with Black Text; SUPPRESSED during active positions to eliminate noise
@@ -748,7 +782,7 @@ if show_stats_table and barstate.islast
     table.cell(stats, 0, 0, "GATE REJECTION AUDIT", text_color=color.yellow, text_size=s_sz, bgcolor=color.new(#21262d, 0))
     table.cell(stats, 1, 0, "COUNT", text_color=color.yellow, text_size=s_sz, bgcolor=color.new(#21262d, 0))
     
-    table.cell(stats, 0, 1, "Regime (SPY/QQQ < 50):", text_color=color.white, text_size=s_sz)
+    table.cell(stats, 0, 1, "Regime (SPY/QQQ < " + str.tostring(regime_ma_period) + "):", text_color=color.white, text_size=s_sz)
     table.cell(stats, 1, 1, str.tostring(rej_cnt_regime), text_color=color.orange, text_size=s_sz)
     
     table.cell(stats, 0, 2, "Score < " + str.tostring(min_score_req, "#.#") + ":", text_color=color.white, text_size=s_sz)

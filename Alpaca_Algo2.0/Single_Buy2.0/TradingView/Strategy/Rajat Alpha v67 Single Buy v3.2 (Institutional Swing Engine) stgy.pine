@@ -9,7 +9,7 @@ strategy("Rajat Alpha v67 Single Buy v3.2 (Institutional Swing Engine) stgy", ov
 // Built for TradingView Strategy Tester: Backtesting, Trade Simulation & Execution Telemetry
 //
 // 1. INSTITUTIONAL 8-STAGE GATING SYSTEM:
-//    - [Gate 0] Market Regime Check: SPY & QQQ > 50 SMA
+//    - [Gate 0] Market Regime Check: SPY & QQQ > Benchmark SMA
 //    - [Gate 1 & 1.5] Market Structure: 50 SMA > 200 SMA, Close > 200 SMA, 21 EMA >= 50 SMA - 2.5%
 //    - [Gate 2] Minervini Stage-2 Impulse Wave: Peak >= EMA21 + 5% in last 20 bars & orderly pullback >= 3%
 //    - [Gate 3] Candlestick Reversal Recognition: 5 Tiered Patterns (Engulfing, Piercing, Hammer, Tweezer, Reversal)
@@ -59,7 +59,8 @@ qqq_ticker              = input.symbol("BATS:QQQ", "QQQ Benchmark ETF", group=gr
 enable_custom_bench     = input.bool(true, "Enable Custom Comparison Benchmark", group=grp_gen)
 custom_ticker           = input.symbol("AAPL", "Custom Comparison Symbol", group=grp_gen)
 min_listing_days        = input.int(200, "Minimum Listing Days (Maturity Filter)", minval=50, maxval=500, group=grp_gen)
-enable_market_regime    = input.bool(true, "Gate 0: Market Regime Filter (SPY & QQQ > 50 SMA)", group=grp_gen)
+enable_market_regime    = input.bool(true, "Gate 0: Market Regime Filter (SPY & QQQ > Benchmark SMA)", group=grp_gen)
+regime_ma_period        = input.int(50, "Gate 0 Benchmark SMA Lookback (e.g. 50, 200, 215)", minval=10, maxval=300, step=5, group=grp_gen, tooltip="Moving average lookback period for SPY & QQQ market regime filter (e.g. 50, 200, or 215). Must match config.json index_ma_period.")
 
 // --- Group: 8-Stage Gating Filters ---
 grp_gate = "2. Institutional 8-Stage Gating Filters"
@@ -192,11 +193,11 @@ sec_p   = request.security(sector_ticker, "D", (close - close[safe_lb]) / close[
 cust_p  = enable_custom_bench ? request.security(custom_ticker, "D", (close - close[safe_lb]) / close[safe_lb], lookahead=barmerge.lookahead_off) : na
 
 spy_close = request.security(spy_ticker, "D", close[barstate.isrealtime ? 1 : 0], lookahead=barmerge.lookahead_off)
-spy_sma50 = request.security(spy_ticker, "D", ta.sma(close, 50)[barstate.isrealtime ? 1 : 0], lookahead=barmerge.lookahead_off)
+spy_sma   = request.security(spy_ticker, "D", ta.sma(close, regime_ma_period)[barstate.isrealtime ? 1 : 0], lookahead=barmerge.lookahead_off)
 qqq_close = request.security(qqq_ticker, "D", close[barstate.isrealtime ? 1 : 0], lookahead=barmerge.lookahead_off)
-qqq_sma50 = request.security(qqq_ticker, "D", ta.sma(close, 50)[barstate.isrealtime ? 1 : 0], lookahead=barmerge.lookahead_off)
+qqq_sma   = request.security(qqq_ticker, "D", ta.sma(close, regime_ma_period)[barstate.isrealtime ? 1 : 0], lookahead=barmerge.lookahead_off)
 
-market_regime_ok = not enable_market_regime or ((not na(spy_close) and not na(spy_sma50) ? spy_close > spy_sma50 : true) and (not na(qqq_close) and not na(qqq_sma50) ? qqq_close > qqq_sma50 : true))
+market_regime_ok = not enable_market_regime or ((not na(spy_close) and not na(spy_sma) ? spy_close > spy_sma : true) and (not na(qqq_close) and not na(qqq_sma) ? qqq_close > qqq_sma : true))
 
 low_21  = ta.lowest(low, 21)
 high_21 = ta.highest(high, 21)
@@ -357,6 +358,38 @@ else if touch_sma50_bar
 if use_ibd_score_bonus and ibd_rs_rating >= ibd_bonus_threshold
     score += ibd_bonus_points
 
+// ------------------------------------------------------------------------------------------------
+// 7.5 INSTITUTIONAL COMPOSITE PRIORITY / TIEBREAKER SCORE (CPS)
+// Exact parity with Python SignalQueue.calculate_composite_priority_score()
+// CPS = (Base_Score_Norm * 0.30) + (Candle_Weight * 0.25) + (RVol_Score * 0.20) + (MA_Mom_Score * 0.15) + (RS_Norm * 0.10)
+// ------------------------------------------------------------------------------------------------
+base_score_norm = math.min(1.0, math.max(0.0, (score - 4.0) / 3.0))
+candle_weight   = pattern_weight
+
+rvol_val = not na(vol_sma21) and vol_sma21 > 0 ? (volume / vol_sma21) : 1.0
+rvol_score = rvol_val >= 2.0 ? 1.0 : rvol_val >= 1.5 ? 0.8 : rvol_val >= 1.0 ? 0.5 : math.max(0.0, rvol_val * 0.5)
+
+slope_21_val = not na(ema21[5]) and ema21[5] > 0 ? ((ema21 - ema21[5]) / ema21[5] * 100.0) : 0.0
+slope_50_val = not na(sma50[5]) and sma50[5] > 0 ? ((sma50 - sma50[5]) / sma50[5] * 100.0) : 0.0
+dist_21_val  = not na(ema21) and ema21 > 0 ? (math.abs(close - ema21) / ema21 * 100.0) : 0.0
+
+ma_mom_score = 0.5
+if slope_21_val > 0.0
+    ma_mom_score += 0.25
+if slope_50_val >= 0.0
+    ma_mom_score += 0.15
+else
+    ma_mom_score -= 0.20
+if dist_21_val <= 1.5
+    ma_mom_score += 0.10
+else if dist_21_val > 3.0
+    ma_mom_score -= 0.10
+ma_mom_score := math.min(1.0, math.max(0.0, ma_mom_score))
+
+rs_score_norm = not na(ibd_rs_rating) ? math.min(1.0, math.max(0.0, ibd_rs_rating / 100.0)) : 0.5
+
+tiebreaker_score = (base_score_norm * 0.30) + (candle_weight * 0.25) + (rvol_score * 0.20) + (ma_mom_score * 0.15) + (rs_score_norm * 0.10)
+
 // Daily Execution Cadence Tracker
 var int trades_executed_today = 0
 if ta.change(time("D")) != 0
@@ -400,9 +433,9 @@ if buy_action and barstate.isconfirmed
         raw_qty = math.floor(fixed_risk_dollars / dollar_risk_share)
         max_shares = math.floor((strategy.equity * (max_stock_alloc_pct / 100.0)) / pos_entry)
         calc_qty = math.max(1.0, math.min(raw_qty, max_shares))
-        strategy.entry("B1", strategy.long, qty=calc_qty, comment="B1 Entry (" + str.tostring(score, "#.#") + ")")
+        strategy.entry("B1", strategy.long, qty=calc_qty, comment="B1 (" + str.tostring(score, "#.#") + " | TB:" + str.tostring(tiebreaker_score, "#.##") + ")")
     else
-        strategy.entry("B1", strategy.long, comment="B1 Entry (" + str.tostring(score, "#.#") + ")")
+        strategy.entry("B1", strategy.long, comment="B1 (" + str.tostring(score, "#.#") + " | TB:" + str.tostring(tiebreaker_score, "#.##") + ")")
 
 if in_position and barstate.isconfirmed
     held_days  = bar_index - pos_bar
@@ -491,10 +524,10 @@ if show_zones and barstate.islast
 
 runner_add_signal = is_valid_signal and in_position and (pos_stage >= 4)
 if runner_add_signal
-    label.new(bar_index, low, "B1 (Add)\n" + str.tostring(score, "#.#"), color=color.new(#00e676, 0), textcolor=color.black, style=label.style_label_up, size=size.normal, tooltip="RUNNER ADD-ON SIGNAL:\nActive strategy position is currently in Stage 4 Runner Mode.\nA fresh institutional setup has qualified (Score: " + str.tostring(score, "#.#") + ").\nExisting runner stop is preserved without alteration.")
+    label.new(bar_index, low, "B1 (Add)\n" + str.tostring(score, "#.#"), color=color.new(#00e676, 0), textcolor=color.black, style=label.style_label_up, size=size.normal, tooltip="RUNNER ADD-ON SIGNAL:\nActive strategy position is currently in Stage 4 Runner Mode.\nA fresh institutional setup has qualified (Score: " + str.tostring(score, "#.#") + " | Tiebreaker: " + str.tostring(tiebreaker_score, "#.####") + ").\nExisting runner stop is preserved without alteration.")
 
 if candidate_signal and is_valid_signal and in_position and (pos_stage < 4) and not buy_action
-    label.new(bar_index, low, "↑OPP\n" + str.tostring(score, "#.#"), color=color.new(#ffd700, 10), textcolor=color.black, style=label.style_arrowup, size=size.normal, tooltip="DISCRETIONARY OPPORTUNITY:\nSetup qualified while automated B1 is active.\nUse for manual secondary execution.")
+    label.new(bar_index, low, "↑OPP\n" + str.tostring(score, "#.#"), color=color.new(#ffd700, 10), textcolor=color.black, style=label.style_arrowup, size=size.normal, tooltip="DISCRETIONARY OPPORTUNITY:\nSetup qualified while automated B1 is active (Score: " + str.tostring(score, "#.#") + " | Tiebreaker: " + str.tostring(tiebreaker_score, "#.####") + ").\nUse for manual secondary execution.")
 
 // Volume Surge "V" Marker with Interactive Tooltip
 pct_vs_prev = volume[1] > 0 ? ((volume - volume[1]) / volume[1] * 100.0) : 0.0

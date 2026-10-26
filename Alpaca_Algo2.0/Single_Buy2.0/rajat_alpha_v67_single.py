@@ -2128,10 +2128,16 @@ class PositionManager:
         if position.get('is_runner', 0) == 1:
             return False
             
-        base_days = self.config.get('risk_management', 'max_hold_days', 21)
+        base_days = self.config.get('risk_management', 'max_hold_days')
+        if base_days is None:
+            base_days = self.config.get('risk_management', 'tes_base_days', 21)
         ext_days = self.config.get('risk_management', 'tes_extension_days', 10)
-        max_ext = self.config.get('risk_management', 'max_tes_extensions', 2)
-        cur_ext = position.get('tes_extensions_count', 0)
+        max_ext = self.config.get('risk_management', 'max_tes_extensions')
+        if max_ext is None:
+            max_ext = self.config.get('risk_management', 'tes_max_extensions', 2)
+        cur_ext = position.get('tes_extensions_count')
+        if cur_ext is None:
+            cur_ext = position.get('tes_extensions', 0)
         
         effective_limit = base_days + (cur_ext * ext_days)
         days_held = self.db.get_days_held(position['id'])
@@ -2141,17 +2147,41 @@ class PositionManager:
             
         # Check dynamic structural extension
         if self.config.get('risk_management', 'enable_dynamic_tes_extension', True) and cur_ext < max_ext:
-            if df is not None and len(df) >= 21:
-                curr_close = df['close'].iloc[-1]
-                ema21 = df['EMA21'].iloc[-1]
-                
-                # If price is holding above 21 EMA constructively (within 1% tolerance), extend!
-                if curr_close >= (ema21 * 0.99):
-                    new_ext = cur_ext + 1
-                    reason = f"Constructive base holding >= 21 EMA (Extension {new_ext}/{max_ext})"
-                    self.db.grant_tes_extension(position['id'], reason)
-                    logger.info(f"[{position['symbol']}] 🎯 DYNAMIC TES EXTENSION {new_ext}/{max_ext} GRANTED (+{ext_days} days to {effective_limit + ext_days} days): Maturing base above EMA21.")
-                    return False
+            # If df is None, attempt to fetch daily bars if data_fetcher is available
+            if df is None and hasattr(self, 'data_fetcher') and self.data_fetcher:
+                try:
+                    df = self.data_fetcher.get_daily_bars(position['symbol'], days=60)
+                except Exception as e:
+                    logger.debug(f"[{position.get('symbol')}] Could not fetch daily bars for TES: {e}")
+
+            if df is not None and len(df) >= 21 and 'close' in df.columns:
+                try:
+                    curr_close = float(df['close'].iloc[-1])
+                    
+                    # Ensure EMA21 is available, calculating dynamically if missing or NaN
+                    if 'EMA21' not in df.columns or pd.isna(df['EMA21'].iloc[-1]):
+                        try:
+                            ema_series = ta.ema(df['close'], length=21)
+                            if ema_series is not None and not ema_series.empty:
+                                df['EMA21'] = ema_series
+                            else:
+                                df['EMA21'] = df['close'].ewm(span=21, adjust=False).mean()
+                        except Exception:
+                            df['EMA21'] = df['close'].ewm(span=21, adjust=False).mean()
+                    
+                    ema21_val = df['EMA21'].iloc[-1]
+                    if not pd.isna(ema21_val) and ema21_val > 0:
+                        ema21 = float(ema21_val)
+                        # If price is holding above 21 EMA constructively (within 1% tolerance), extend!
+                        if curr_close >= (ema21 * 0.99):
+                            new_ext = cur_ext + 1
+                            reason = f"Constructive base holding >= 21 EMA (Extension {new_ext}/{max_ext})"
+                            self.db.grant_tes_extension(position['id'], reason)
+                            position['tes_extensions_count'] = new_ext
+                            logger.info(f"[{position['symbol']}] 🎯 DYNAMIC TES EXTENSION {new_ext}/{max_ext} GRANTED (+{ext_days} days to {effective_limit + ext_days} days): Maturing base above EMA21.")
+                            return False
+                except Exception as e:
+                    logger.error(f"[{position.get('symbol')}] Error evaluating dynamic TES extension: {e}")
                     
         return True
 
@@ -2535,46 +2565,56 @@ class RajatAlphaTradingBot:
         pos_summaries = []
         for position in open_positions:
             symbol = position['symbol']
-            curr_price = self.data_fetcher.get_current_price(symbol)
-            if curr_price is None:
-                logger.warning(f"[{symbol}] Could not fetch current price, skipping cycle check.")
-                continue
-            
-            profit_pct = (curr_price - position['entry_price']) / position['entry_price'] * 100.0
-            stage_str = f"Stage {position.get('sl_stage', 0)}" + (" [RUNNER]" if position.get('is_runner') else "")
-            peak_price = max(position.get('highest_price_seen') or curr_price, curr_price)
-            
-            pos_summaries.append({
-                'symbol': symbol,
-                'entry': position['entry_price'],
-                'curr': curr_price,
-                'qty': position['remaining_qty'],
-                'pl_pct': profit_pct,
-                'sl': position['stop_loss'],
-                'stage': stage_str,
-                'peak': peak_price,
-                'is_runner': position.get('is_runner', 0)
-            })
-            
-            # 1. Update Trailing Stop Stepper
-            self.position_manager.update_trailing_stop_loss(position, current_price=curr_price)
-            
-            # 2. Check Stop Loss (Respects Closing-Basis & First-Hour Guard)
-            if self.position_manager.check_stop_loss(position, curr_price, is_closing_window=is_closing, is_first_hour_suppressed=suppress_first_hour):
-                logger.warning(f"[{symbol}] 🚨 STOP LOSS TRIGGERED at ${curr_price:.2f}")
-                self.position_manager.execute_full_exit(position, curr_price, "Stop Loss")
-                continue
+            try:
+                curr_price = self.data_fetcher.get_current_price(symbol)
+                if curr_price is None:
+                    logger.warning(f"[{symbol}] Could not fetch current price, skipping cycle check.")
+                    continue
                 
-            # 3. Check 4-Tier Partial Exits & Runner Mode
-            partial_exits = self.position_manager.check_partial_exit_targets(position, curr_price)
-            for t_name, qty, t_price in partial_exits:
-                self.position_manager.execute_partial_exit(position, t_name, qty, curr_price)
+                profit_pct = (curr_price - position['entry_price']) / position['entry_price'] * 100.0
+                stage_str = f"Stage {position.get('sl_stage', 0)}" + (" [RUNNER]" if position.get('is_runner') else "")
+                peak_price = max(position.get('highest_price_seen') or curr_price, curr_price)
                 
-            # 4. Check Dynamic Structural TES
-            df_sym = self.data_fetcher.get_daily_bars(symbol, days=40)
-            if not suppress_first_hour and self.position_manager.check_time_exit(position, df_sym):
-                logger.warning(f"[{symbol}] ⏰ TIME EXIT SIGNAL (TES) triggered")
-                self.position_manager.execute_full_exit(position, curr_price, "TES")
+                pos_summaries.append({
+                    'symbol': symbol,
+                    'entry': position['entry_price'],
+                    'curr': curr_price,
+                    'qty': position['remaining_qty'],
+                    'pl_pct': profit_pct,
+                    'sl': position['stop_loss'],
+                    'stage': stage_str,
+                    'peak': peak_price,
+                    'is_runner': position.get('is_runner', 0)
+                })
+                
+                # 1. Update Trailing Stop Stepper
+                self.position_manager.update_trailing_stop_loss(position, current_price=curr_price)
+                
+                # 2. Check Stop Loss (Respects Closing-Basis & First-Hour Guard)
+                if self.position_manager.check_stop_loss(position, curr_price, is_closing_window=is_closing, is_first_hour_suppressed=suppress_first_hour):
+                    logger.warning(f"[{symbol}] 🚨 STOP LOSS TRIGGERED at ${curr_price:.2f}")
+                    self.position_manager.execute_full_exit(position, curr_price, "Stop Loss")
+                    continue
+                    
+                # 3. Check 4-Tier Partial Exits & Runner Mode
+                partial_exits = self.position_manager.check_partial_exit_targets(position, curr_price)
+                for t_name, qty, t_price in partial_exits:
+                    self.position_manager.execute_partial_exit(position, t_name, qty, curr_price)
+                    
+                # 4. Check Dynamic Structural TES
+                df_sym = self.data_fetcher.get_daily_bars(symbol, days=60)
+                if df_sym is not None and len(df_sym) >= 21:
+                    try:
+                        df_sym = self.analyzer.calculate_indicators(df_sym)
+                    except Exception as e:
+                        logger.debug(f"[{symbol}] Indicator calculation on daily bars: {e}")
+                        
+                if not suppress_first_hour and self.position_manager.check_time_exit(position, df_sym):
+                    logger.warning(f"[{symbol}] ⏰ TIME EXIT SIGNAL (TES) triggered")
+                    self.position_manager.execute_full_exit(position, curr_price, "TES")
+                    continue
+            except Exception as e:
+                logger.error(f"[{symbol}] Error processing position in Sell Guardian: {e}", exc_info=True)
                 continue
                 
         # Structured Logging: Full Portfolio Table every 10-15 minutes; clean 1-line Heartbeat otherwise

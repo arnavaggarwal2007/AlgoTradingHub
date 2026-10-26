@@ -289,12 +289,14 @@ class TestInstitutionalScreenerV35:
         assert "kernelspec" in nb["metadata"]
         assert nb["metadata"]["kernelspec"]["name"] == "python3"
         
-        # Verify Step 6 has interactive dropdown inspector and top 10 auto-render
+        # Verify Step 5 & 6 have interactive dropdown inspector and top 10 auto-render
+        step5_source = "".join(nb["cells"][5]["source"])
         step6_source = "".join(nb["cells"][6]["source"])
-        assert "ipywidgets as widgets" in step6_source
-        assert "Dropdown" in step6_source
-        assert "plot_candlestick_chart" in step6_source
-        assert "min(10, len(stored_chart_data))" in step6_source or "top_candidates" in step6_source
+        all_chart_code = step5_source + "\n" + step6_source
+        assert "ipywidgets as widgets" in all_chart_code
+        assert "Dropdown" in all_chart_code
+        assert "plot_candlestick_chart" in all_chart_code
+        assert "min(max_charts_to_display" in all_chart_code or "top_charts" in all_chart_code
 
     def test_colab_master_suite_and_modular_structure(self):
         """Verify Master Suite notebook exists and modular folders are intact"""

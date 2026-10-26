@@ -118,6 +118,34 @@ BROADER_MARKET_SYMBOLS = [
     "XYZ", "RGA", "FA", "AMP", "KFY", "CXW"
 ]
 
+
+def parse_tradingview_export(filepath_or_content: str) -> List[str]:
+    """
+    Parses a TradingView export (CSV, TXT, or comma-separated string).
+    Strips exchange prefixes (NASDAQ:NVDA -> NVDA) and header rows.
+    """
+    content = ""
+    if os.path.exists(filepath_or_content):
+        with open(filepath_or_content, 'r', encoding='utf-8', errors='ignore') as f:
+            content = f.read()
+    else:
+        content = filepath_or_content
+        
+    symbols = []
+    lines = content.strip().splitlines()
+    for line in lines:
+        line = line.strip()
+        if not line or line.startswith('#'):
+            continue
+        tokens = [t.strip().strip('"').strip("'") for t in line.split(",") if t.strip()]
+        for token in tokens:
+            if token.lower() in ['ticker', 'symbol', 'description', 'price', 'volume', 'name']:
+                continue
+            sym = token.split(":")[-1].strip().upper()
+            if sym.isalpha() and 1 <= len(sym) <= 5:
+                symbols.append(sym)
+    return list(dict.fromkeys(symbols))
+
 def get_segmented_universe(mode: str = "combined") -> Tuple[List[str], Dict[str, str]]:
     m = mode.lower().strip()
     category_map = {}
@@ -431,11 +459,23 @@ def evaluate_screener_candidate(symbol: str, df: pd.DataFrame,
 # ================================================================================
 
 def generate_candlestick_chart(symbol: str, df: pd.DataFrame, cand_data: Dict[str, Any],
-                               output_path: Optional[str] = None, show: bool = False):
+                               output_path: Optional[str] = None, show: bool = False,
+                               theme: str = 'dark'):
     if df is None or len(df) < 35: return
     sub = df.iloc[-35:].copy()
-    fig, ax = plt.subplots(figsize=(13, 6.5), facecolor='#0d1117')
-    ax.set_facecolor('#161b22')
+    
+    is_dark = (theme.lower() == 'dark')
+    bg_fig = '#0d1117' if is_dark else '#ffffff'
+    bg_ax = '#161b22' if is_dark else '#f6f8fa'
+    text_color = '#f0f6fc' if is_dark else '#24292f'
+    subtext_color = '#8b949e' if is_dark else '#57606a'
+    grid_color = '#21262d' if is_dark else '#d0d7de'
+    border_color = '#30363d' if is_dark else '#d0d7de'
+    sma200_color = '#ffffff' if is_dark else '#000000'
+    
+    fig, ax = plt.subplots(figsize=(14, 6.5), facecolor=bg_fig)
+    ax.set_facecolor(bg_ax)
+    fig.subplots_adjust(top=0.88, bottom=0.12, left=0.07, right=0.96)
     
     width = 0.6
     up = sub[sub['Close'] >= sub['Open']]
@@ -446,61 +486,84 @@ def generate_candlestick_chart(symbol: str, df: pd.DataFrame, cand_data: Dict[st
     ax.bar(down.index, down['Close'] - down['Open'], width, bottom=down['Open'], color='#ff5252', edgecolor='#ff5252', zorder=3)
     ax.vlines(down.index, down['Low'], down['High'], color='#ff5252', linewidth=1.2, zorder=2)
     
-    ax.plot(sub.index, sub['EMA10'], color='#00e5ff', label='10 EMA', linewidth=1.4, zorder=4)
-    ax.plot(sub.index, sub['EMA21'], color='#ffd700', label='21 EMA (Prime Support)', linewidth=2.0, zorder=4)
-    ax.plot(sub.index, sub['SMA50'], color='#e040fb', label='50 SMA (Institutional Demand)', linewidth=1.8, zorder=4)
+    # User-Specified Color Scheme:
+    # 10 EMA: Cyan | 21 EMA: Green | 50 SMA: Orange | 150 SMA: Blue | 200 SMA: White (dark) / Black (light)
+    ax.plot(sub.index, sub['EMA10'], color='#00e5ff', label='10 EMA (Momentum)', linewidth=1.4, zorder=4)
+    ax.plot(sub.index, sub['EMA21'], color='#00e676', label='21 EMA (Prime Pullback Support)', linewidth=2.0, zorder=4)
+    ax.plot(sub.index, sub['SMA50'], color='#ff9100', label='50 SMA (Institutional Demand)', linewidth=1.8, zorder=4)
+    if 'SMA150' in sub.columns and not pd.isna(sub['SMA150'].iloc[-1]):
+        ax.plot(sub.index, sub['SMA150'], color='#2979ff', label='150 SMA (Intermediate Baseline)', linewidth=1.5, zorder=4)
     if 'SMA200' in sub.columns and not pd.isna(sub['SMA200'].iloc[-1]):
-        ax.plot(sub.index, sub['SMA200'], color='#ff1744', label='200 SMA (Macro Baseline)', linewidth=1.5, linestyle='--', zorder=4)
+        ax.plot(sub.index, sub['SMA200'], color=sma200_color, label='200 SMA (Macro Baseline)', linewidth=1.5, linestyle='--', zorder=4)
         
     low_21 = float(sub['Low'].min())
-    ax.axhspan(low_21, low_21 * 1.035, color='#00e676', alpha=0.15, label='Daily Demand Zone (<=3.5% above 21d low)', zorder=1)
+    ax.axhspan(low_21, low_21 * 1.035, color='#00e676', alpha=0.15, label='Daily Demand Zone (<=3.5% from 21d low)', zorder=1)
     
+    # Accurate Swing Points Anchor (Using Exact Bar Datetime)
+    def find_idx_by_date(dt_str):
+        if not dt_str or dt_str == "N/A": return None
+        for idx in sub.index:
+            try:
+                if pd.to_datetime(idx).strftime('%Y-%m-%d') == dt_str:
+                    return idx
+            except Exception: pass
+        return None
+        
     sl1_val, sl2_val = cand_data.get('sl1', 0.0), cand_data.get('sl2', 0.0)
     sh1_val, sh2_val = cand_data.get('sh1', 0.0), cand_data.get('sh2', 0.0)
-    if sl1_val > 0:
-        ax.scatter([sub.index[-12]], [sl1_val], color='#00e676', s=90, marker='^', zorder=5)
-        ax.text(sub.index[-12], sl1_val * 0.985, f"SL1: ${sl1_val:.2f}", color='#00e676', fontsize=8, ha='center', weight='bold')
-    if sl2_val > 0:
-        ax.scatter([sub.index[-4]], [sl2_val], color='#00e676', s=110, marker='^', zorder=5)
-        ax.text(sub.index[-4], sl2_val * 0.985, f"SL2: ${sl2_val:.2f}", color='#00e676', fontsize=8, ha='center', weight='bold')
-    if sh1_val > 0:
-        ax.scatter([sub.index[-18]], [sh1_val], color='#ff5252', s=90, marker='v', zorder=5)
-        ax.text(sub.index[-18], sh1_val * 1.01, f"SH1: ${sh1_val:.2f}", color='#ff5252', fontsize=8, ha='center', weight='bold')
-    if sh2_val > 0:
-        ax.scatter([sub.index[-8]], [sh2_val], color='#ff5252', s=110, marker='v', zorder=5)
-        ax.text(sub.index[-8], sh2_val * 1.01, f"SH2: ${sh2_val:.2f}", color='#ff5252', fontsize=8, ha='center', weight='bold')
+    x_sl1 = find_idx_by_date(cand_data.get('sl1_date'))
+    x_sl2 = find_idx_by_date(cand_data.get('sl2_date'))
+    x_sh1 = find_idx_by_date(cand_data.get('sh1_date'))
+    x_sh2 = find_idx_by_date(cand_data.get('sh2_date'))
+    
+    # Swing Lows: Emerald Green triangles at candle wick lows
+    if x_sl1 is not None and sl1_val > 0:
+        ax.scatter([x_sl1], [sl1_val], color='#00e676', s=100, marker='^', zorder=5)
+        ax.text(x_sl1, sl1_val * 0.985, f"SL1: ${sl1_val:.2f}", color='#00e676', fontsize=8, ha='center', weight='bold')
+    if x_sl2 is not None and sl2_val > 0:
+        ax.scatter([x_sl2], [sl2_val], color='#00e676', s=120, marker='^', zorder=5)
+        ax.text(x_sl2, sl2_val * 0.985, f"SL2: ${sl2_val:.2f}", color='#00e676', fontsize=8, ha='center', weight='bold')
         
+    # Swing Highs: Royal Blue triangles at candle wick peaks (avoids conflicting red stop-loss color)
+    if x_sh1 is not None and sh1_val > 0:
+        ax.scatter([x_sh1], [sh1_val], color='#2979ff', s=100, marker='v', zorder=5)
+        ax.text(x_sh1, sh1_val * 1.015, f"SH1: ${sh1_val:.2f}", color='#2979ff', fontsize=8, ha='center', weight='bold')
+    if x_sh2 is not None and sh2_val > 0:
+        ax.scatter([x_sh2], [sh2_val], color='#2979ff', s=120, marker='v', zorder=5)
+        ax.text(x_sh2, sh2_val * 1.015, f"SH2: ${sh2_val:.2f}", color='#2979ff', fontsize=8, ha='center', weight='bold')
+        
+    horizon_text = cand_data.get('setup_horizon', 'TIER 1')
     entry = cand_data.get('suggested_entry', float(sub['Close'].iloc[-1]))
     stop = cand_data.get('initial_stop_loss', entry * 0.93)
     t1 = cand_data.get('target_1', entry * 1.05)
     t2 = cand_data.get('target_2', entry * 1.10)
     
-    ax.axhline(entry, color='#00e5ff', linestyle='--', linewidth=1.5, label=f"Projected Entry: ${entry:.2f}")
+    entry_label = f"Trigger Entry (Sweet Spot): ${entry:.2f}" if "TIER 1" in horizon_text else f"Planned Pullback Entry (21 EMA): ${entry:.2f}"
+    ax.axhline(entry, color='#00e5ff', linestyle='--', linewidth=1.5, label=entry_label)
     ax.axhline(stop, color='#ff1744', linestyle='--', linewidth=1.5, label=f"Stop Loss: ${stop:.2f} (-{cand_data.get('risk_pct', 7.0)}%)")
     ax.axhline(t1, color='#69f0ae', linestyle=':', linewidth=1.2, label=f"Target 1 (+5%): ${t1:.2f}")
     ax.axhline(t2, color='#ffd700', linestyle=':', linewidth=1.2, label=f"Target 2 (+10%): ${t2:.2f} (R:R {cand_data.get('risk_reward', 1.6)}:1)")
     
-    ax.grid(True, color='#21262d', linestyle='--', alpha=0.6)
-    ax.tick_params(colors='#8b949e', labelsize=9)
-    for spine in ax.spines.values(): spine.set_color('#30363d')
+    ax.grid(True, color=grid_color, linestyle='--', alpha=0.6)
+    ax.tick_params(colors=subtext_color, labelsize=9)
+    for spine in ax.spines.values(): spine.set_color(border_color)
     
     category_badge = f"[{cand_data.get('category', 'INDEX')}]"
-    horizon_text = cand_data.get('setup_horizon', 'TIER 1')
     iqs = cand_data.get('iqs_score', 85)
     grade = cand_data.get('grade', 'A')
     
     title_main = f"{symbol} {category_badge} — {horizon_text} | Grade: {grade} (IQS: {iqs}/100)"
     subtitle = f"Buy Zone: {cand_data.get('buy_zone_type', '21 EMA')} | Daily Demand: {cand_data.get('daily_demand_zone')} | Weekly Demand: {cand_data.get('weekly_demand_zone')} | Vol Pocket Pivot: {cand_data.get('volume_surge_tag')}"
     
-    plt.suptitle(title_main, color='#f0f6fc', fontsize=12, fontweight='bold', y=0.98)
-    plt.title(subtitle, color='#8b949e', fontsize=9, pad=8)
-    ax.legend(facecolor='#161b22', edgecolor='#30363d', labelcolor='#c9d1d9', loc='upper left', fontsize=8, ncol=2)
+    plt.suptitle(title_main, color=text_color, fontsize=12, fontweight='bold', y=0.96)
+    plt.title(subtitle, color=subtext_color, fontsize=9, pad=6)
+    ax.legend(facecolor=bg_ax, edgecolor=border_color, labelcolor=text_color, loc='upper left', fontsize=8, ncol=2)
     
     if output_path:
         os.makedirs(os.path.dirname(os.path.abspath(output_path)), exist_ok=True)
         plt.savefig(output_path, dpi=120, bbox_inches='tight')
     if show: plt.show()
-    plt.close()
+    plt.close(fig)
 
 # ================================================================================
 # 6. MULTI-SHEET FORMATTED EXCEL WORKBOOK GENERATOR (CONFIGURABLE TOP N)
@@ -655,7 +718,7 @@ def export_watchlist_txt(results: List[Dict], output_txt: str = "watchlist.txt",
 # 7. SCANNER ORCHESTRATION PIPELINE
 # ================================================================================
 
-def run_screener_pipeline(universe_mode: str = "combined",
+def run_screener_pipeline(universe_mode: str = "combined", custom_file: str = "",
                           output_excel: str = "weekly_swing_screener_results.xlsx",
                           output_txt: str = "watchlist.txt",
                           update_watchlist: bool = False,
@@ -751,6 +814,7 @@ def run_screener_pipeline(universe_mode: str = "combined",
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Institutional Weekly Swing Trading Screener & Radar")
+    parser.add_argument("--file", type=str, default="", help="Path to TradingView CSV/TXT export file")
     parser.add_argument("--universe", type=str, default="combined", choices=["combined", "indices", "broader", "dow30", "nasdaq100", "sp500"])
     parser.add_argument("--output", type=str, default="weekly_swing_screener_results.xlsx")
     parser.add_argument("--output-txt", type=str, default="watchlist.txt")
@@ -761,7 +825,8 @@ if __name__ == "__main__":
     args = parser.parse_args()
     
     run_screener_pipeline(
-        universe_mode=args.universe,
+        universe_mode="custom" if args.file else args.universe,
+        custom_file=args.file,
         output_excel=args.output,
         output_txt=args.output_txt,
         update_watchlist=args.update_watchlist,

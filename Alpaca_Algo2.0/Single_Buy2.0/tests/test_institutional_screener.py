@@ -35,6 +35,7 @@ from scripts.scanner.run_institutional_weekly_screener import (
     generate_candlestick_chart,
     export_screener_to_excel,
     export_watchlist_txt,
+    parse_tradingview_export,
     DOW_30_SYMBOLS,
     NASDAQ_100_SYMBOLS,
     BROADER_MARKET_SYMBOLS
@@ -323,4 +324,19 @@ class TestInstitutionalScreenerV35:
             mod_dir = os.path.join(base_colab, m)
             assert os.path.isdir(mod_dir)
             assert os.path.exists(os.path.join(mod_dir, "README.md"))
+
+    def test_parse_tradingview_export(self):
+        """Verify TradingView CSV/TXT export parser strips prefixes and handles formats"""
+        tv_sample = (
+            "Ticker,Description,Price\n"
+            "NASDAQ:NVDA,NVIDIA Corporation,140.50\n"
+            "NYSE:LLY,Eli Lilly and Company,910.00\n"
+            "NASDAQ:CELH,Celsius Holdings,45.20\n"
+        )
+        symbols = parse_tradingview_export(tv_sample)
+        assert symbols == ["NVDA", "LLY", "CELH"]
+
+        # Test comma-separated list without headers
+        plain_sample = "AAPL, MSFT, AMZN, TSLA"
+        assert parse_tradingview_export(plain_sample) == ["AAPL", "MSFT", "AMZN", "TSLA"]
 

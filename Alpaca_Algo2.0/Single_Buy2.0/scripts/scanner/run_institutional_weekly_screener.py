@@ -40,6 +40,10 @@ from typing import Dict, List, Tuple, Optional, Any
 import pandas as pd
 import numpy as np
 import yfinance as yf
+import logging
+import warnings
+warnings.filterwarnings('ignore')
+logging.getLogger('yfinance').setLevel(logging.CRITICAL)
 import openpyxl
 from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
 from openpyxl.utils import get_column_letter
@@ -66,13 +70,13 @@ NASDAQ_100_SYMBOLS = [
     "AAPL", "ABNB", "ADBE", "ADI", "ADP", "ADSK", "AEP", "AMAT", "AMD", "AMGN",
     "AMZN", "APP", "ARM", "ASML", "AVGO", "AXON", "BIIB", "BKNG", "BKR",
     "CCEP", "CDNS", "CDW", "CEG", "CHTR", "CPRT", "CRWD", "CSCO", "CSX", "CTAS",
-    "CTSH", "DASH", "DDOG", "DLTR", "DXCM", "EA", "EXC", "FANG", "FAST", "FTNT",
+    "CTSH", "DASH", "DDOG", "DLTR", "DXCM", "APP", "EXC", "FANG", "FAST", "FTNT",
     "GEHC", "GFS", "GILD", "GOOG", "GOOGL", "HON", "IDXX", "ILMN", "INTC", "INTU",
     "ISRG", "KDP", "KHC", "KLAC", "LIN", "LRCX", "LULU", "MAR", "MCHP", "MDB",
     "MDLZ", "MELI", "META", "MNST", "MRNA", "MRVL", "MSFT", "MU", "NFLX", "NVDA",
     "NXPI", "ODFL", "ON", "ORLY", "PANW", "PAYX", "PCAR", "PDD", "PEP", "PLTR",
     "PYPL", "QCOM", "REGN", "ROP", "ROST", "SBUX", "SNPS", "TEAM", "TMUS", "TSLA",
-    "TTD", "TXN", "VRSK", "VRTX", "WBD", "WDAY", "XEL", "ZS"
+    "TTD", "TXN", "VRSK", "VRTX", "ARM", "WDAY", "XEL", "ZS"
 ]
 
 SP_500_CORE_SAMPLE = [
@@ -92,22 +96,22 @@ BROADER_MARKET_SYMBOLS = [
     "NET", "SNOW", "HUBS", "ESTC", "PATH", "DOCN", "MSTR", "TOST", "DUOL", "IOT",
     "SYM", "TEM", "ALAB", "VRT", "RBRK", "TWLO", "SHOP", "SE", "BILL", "AFRM",
     "UPST", "HOOD", "SOFI", "COIN", "DT", "GWRE", "MNDY", "PEGA", "PCTY", "PAYC",
-    "MANH", "TYL", "PTC", "APPF", "BL", "SMAR", "TENB", "VRNS", "OKTA", "FROG",
-    "U", "RELY", "GH", "TSM", "SMCI", "PSTG", "CAHR", "MPWR", "ALGM", "COHR",
+    "MANH", "TYL", "PTC", "APPF", "BL", "TENB", "VRNS", "OKTA", "FROG",
+    "U", "RELY", "GH", "TSM", "SMCI", "MPWR", "ALGM", "COHR",
     "AMBA", "POWI", "RMBS", "ACLS", "DIOD", "LSCC", "MTSI", "TER", "ENTG", "MKSI",
-    "CCMP", "FORM", "AMKR", "CAMT", "ICHR", "UCTT", "VECO", "INSW", "TNK", "LPG",
+    "FORM", "AMKR", "CAMT", "ICHR", "UCTT", "VECO", "INSW", "TNK", "LPG",
     "FRO", "STNG", "GSL", "ZIM", "VIST", "EQT", "LNG", "FSLR", "NXT", "AR",
     "RRC", "CHRD", "SM", "PR", "MTDR", "MGY", "CRK", "CNX", "DVN", "APA",
-    "CTRA", "OVV", "HES", "OXY", "PAGP", "OKE", "PWR", "EME", "FIX", "BLDR",
+    "OVV", "OXY", "PAGP", "OKE", "PWR", "EME", "FIX", "BLDR",
     "IBP", "ACM", "J", "HUBB", "NVT", "GWW", "FDX", "SAIA", "XPO", "WSO",
-    "TTC", "AGCO", "SITE", "TREX", "AZEK", "OSK", "CR", "RBC", "AIT", "GGG",
+    "TTC", "AGCO", "SITE", "TREX", "OSK", "CR", "RBC", "AIT", "GGG",
     "LECO", "MIDD", "CW", "HEI", "HII", "HWM", "ATI", "NDSN", "NSP", "TILE",
     "CELH", "ONON", "BIRK", "DECK", "SHAK", "CAVA", "WING", "BROS", "SG", "BOOT",
-    "CROX", "SKX", "TSCO", "FIVE", "OLLI", "CHWY", "CART", "CAKE", "EAT", "DRI",
+    "CROX", "TSCO", "FIVE", "OLLI", "CHWY", "CART", "CAKE", "EAT", "DRI",
     "TXRH", "YUM", "DPZ", "PZZA", "BJRI", "PLAY", "LOCO", "ARCO", "DIN", "CHEF",
     "CNK", "IMAX", "ARGX", "ALNY", "BMRN", "CRSP", "BEAM", "NTRA", "RVMD", "KNSA",
-    "AXSM", "INSM", "CYTK", "ARDX", "VKTX", "MDGL", "APGE", "HALO", "INCY", "NBIX",
-    "JAZZ", "IONS", "ICPT", "ALKS", "PODD", "PEN", "TFX", "EW", "HOLX", "WST",
+    "AXSM", "INSM", "CYTK", "ARDX", "VKTX", "MDGL", "HALO", "INCY", "NBIX",
+    "JAZZ", "IONS", "ALKS", "PODD", "PEN", "TFX", "EW", "WST",
     "CAH", "BDX", "BMY", "IMVT", "GKOS", "PHVS", "AXGN", "THG", "KKR", "APO",
     "ARES", "BX", "OWL", "HLNE", "STEP", "CG", "LPLA", "RJF", "IBKR", "TW",
     "VIRT", "PIPR", "MC", "EVR", "CNO", "BFH", "UMBF", "WSBC", "BUSE", "PK",
@@ -115,7 +119,7 @@ BROADER_MARKET_SYMBOLS = [
     "USB", "WT", "PFG", "LFST", "UBSI", "AIZ", "ALL", "VOYA", "ONB", "ASH",
     "CLBK", "CATY", "BEN", "IVZ", "NTAP", "GCMG", "MET", "EG", "NTRS", "VCTR",
     "NMIH", "TNET", "NOV", "TIGO", "MSGE", "ECPG", "ROIV", "CLMT", "CON", "AVT",
-    "XYZ", "RGA", "FA", "AMP", "KFY", "CXW"
+    "RGA", "FA", "AMP", "KFY", "CXW"
 ]
 
 

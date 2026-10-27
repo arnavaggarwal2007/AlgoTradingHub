@@ -2952,12 +2952,16 @@ class RajatAlphaTradingBot:
                 logger.info(f"[{symbol}] ℹ️ Already holding maximum open position ({len(existing)}/{max_per_stock}), skipping scan.")
                 continue
                 
-            valid, details = self.analyzer.analyze_entry_signal(symbol)
-            self.db.log_signal(symbol, details, executed=False)
-            if valid:
-                self.signal_queue.add_signal(symbol, details)
-                new_staged += 1
-                logger.info(f"[{symbol}] 📥 STAGED IN BUY QUEUE: Score {details.get('score')}/7.0 | IBD RS: {details.get('rs_score'):.1f} | Pattern: {details.get('pattern')} | Price: ${details.get('price'):.2f}")
+            try:
+                valid, details = self.analyzer.analyze_entry_signal(symbol)
+                self.db.log_signal(symbol, details, executed=False)
+                if valid:
+                    self.signal_queue.add_signal(symbol, details)
+                    new_staged += 1
+                    logger.info(f"[{symbol}] 📥 STAGED IN BUY QUEUE: Score {details.get('score')}/7.0 | IBD RS: {details.get('rs_score'):.1f} | Pattern: {details.get('pattern')} | Price: ${details.get('price'):.2f}")
+            except Exception as e:
+                logger.error(f"[{symbol}] Error analyzing symbol in Buy Hunter: {e}", exc_info=True)
+                continue
                 
         logger.info(f"Buy Hunter scan complete: {new_staged} new candidates staged. Total queue: {len(self.signal_queue.signals)} candidates (re-validates in {self.signal_queue.monitoring_minutes} min).")
         if self.signal_queue.signals:

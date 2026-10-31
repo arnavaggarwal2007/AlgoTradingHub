@@ -1404,12 +1404,17 @@ class RajatAlphaAnalyzer:
         curr_vol = float(curr_candle['volume'])
         rvol = round(curr_vol / vol_sma21, 2) if vol_sma21 > 0 else 1.0
 
-        ema21_now = float(df_daily['ema_21'].iloc[-1])
-        ema21_prev5 = float(df_daily['ema_21'].iloc[-6]) if len(df_daily) >= 6 else float(df_daily['ema_21'].iloc[0])
+        ema21_col = 'EMA21' if 'EMA21' in df_daily.columns else ('ema_21' if 'ema_21' in df_daily.columns else 'ema21')
+        sma50_col = 'SMA50' if 'SMA50' in df_daily.columns else ('sma_50' if 'sma_50' in df_daily.columns else 'sma50')
+        ema21_series = df_daily[ema21_col]
+        sma50_series = df_daily[sma50_col]
+
+        ema21_now = float(ema21_series.iloc[-1])
+        ema21_prev5 = float(ema21_series.iloc[-6]) if len(df_daily) >= 6 else float(ema21_series.iloc[0])
         slope_21_pct = round(((ema21_now - ema21_prev5) / ema21_prev5) * 100.0, 2) if ema21_prev5 > 0 else 0.0
 
-        sma50_now = float(df_daily['sma_50'].iloc[-1])
-        sma50_prev20 = float(df_daily['sma_50'].iloc[-21]) if len(df_daily) >= 21 else float(df_daily['sma_50'].iloc[0])
+        sma50_now = float(sma50_series.iloc[-1])
+        sma50_prev20 = float(sma50_series.iloc[-21]) if len(df_daily) >= 21 else float(sma50_series.iloc[0])
         slope_50_pct = round(((sma50_now - sma50_prev20) / sma50_prev20) * 100.0, 2) if sma50_prev20 > 0 else 0.0
 
         dist_to_ema21_pct = round(abs(curr_price - ema21_now) / ema21_now * 100.0, 2) if ema21_now > 0 else 0.0
@@ -1607,6 +1612,79 @@ class PositionManager:
             
         # Fallback to fixed 17%
         return round(entry_price * (1.0 - max_pct), 4)
+
+    def _extract_filled_qty(self, order_obj: Any) -> int:
+        """Safely extract filled quantity from an order object, handling mocks and None."""
+        if order_obj is None:
+            return 0
+        raw_qty = getattr(order_obj, 'filled_qty', None)
+        if raw_qty is None:
+            return 0
+        if isinstance(raw_qty, (int, float)):
+            return int(raw_qty)
+        if isinstance(raw_qty, str):
+            try:
+                return int(float(raw_qty))
+            except (ValueError, TypeError):
+                return 0
+        return 0
+
+    def _get_broker_remaining_qty(self, symbol: str) -> Optional[int]:
+        """Safely get actual remaining open position qty from broker, handling mocks and 404s."""
+        try:
+            broker_pos = self.trading_client.get_open_position(symbol)
+            raw_qty = getattr(broker_pos, 'qty', None)
+            if isinstance(raw_qty, (int, float)):
+                return int(raw_qty)
+            if isinstance(raw_qty, str):
+                try:
+                    return int(float(raw_qty))
+                except (ValueError, TypeError):
+                    pass
+        except Exception as be:
+            err_str = str(be).lower()
+            if '404' in err_str or 'position does not exist' in err_str or 'not found' in err_str:
+                return 0
+        return None
+
+    def _submit_sell_order_with_reconciliation(self, order_req: Any, position: Dict, current_price: float, reason: str) -> Tuple[Optional[Any], int]:
+        """
+        Submits a sell order. If rejected due to 'insufficient qty' (e.g. fast market partial fill),
+        queries broker for actual available shares, reconciles DB remaining_qty, and resubmits
+        for the true remaining quantity to prevent order desynchronization loops.
+        Returns (order_obj_or_None, updated_remaining_qty).
+        """
+        symbol = position['symbol']
+        pos_id = position['id']
+        try:
+            order = self.trading_client.submit_order(order_req)
+            return order, order_req.qty
+        except Exception as e:
+            err_msg = str(e).lower()
+            if 'insufficient qty' in err_msg or '403' in err_msg:
+                logger.warning(f"[{symbol}] Order submission rejected for qty={order_req.qty} ('{e}'). Verifying broker position...")
+                broker_qty = self._get_broker_remaining_qty(symbol)
+                if broker_qty is not None:
+                    if broker_qty <= 0:
+                        logger.info(f"[{symbol}] Broker confirms 0 shares open. Position was already filled on broker.")
+                        self.db.update_position_quantity(pos_id, 0)
+                        position['remaining_qty'] = 0
+                        self.db.close_position(pos_id, current_price, reason)
+                        return None, 0
+                    elif broker_qty < order_req.qty:
+                        logger.warning(f"[{symbol}] Auto-reconciling qty from {order_req.qty} down to actual broker qty {broker_qty}...")
+                        self.db.update_position_quantity(pos_id, broker_qty)
+                        position['remaining_qty'] = broker_qty
+                        order_req.qty = broker_qty
+                        try:
+                            order = self.trading_client.submit_order(order_req)
+                            logger.info(f"[{symbol}] Successfully resubmitted reconciled order for {broker_qty} shares.")
+                            return order, broker_qty
+                        except Exception as re_e:
+                            logger.error(f"[{symbol}] Resubmission failed for reconciled qty {broker_qty}: {re_e}")
+                            return None, broker_qty
+            logger.error(f"[{symbol}] Sell order submission failed: {e}")
+            return None, order_req.qty
 
     def _wait_for_order_fill(self, order_id: Any, symbol: str, timeout_seconds: int = 15, poll_interval: float = 1.0) -> Tuple[bool, Optional[Any]]:
         """
@@ -1984,6 +2062,22 @@ class PositionManager:
                         logger.warning(f"[{symbol}] Error cancelling partial exit limit sell: {ce}")
                     time.sleep(1.0)
                     
+                    # Post-cancellation partial fill accounting
+                    try:
+                        ord1_latest = self.trading_client.get_order_by_id(ord1.id)
+                    except Exception:
+                        ord1_latest = ord1_status
+                    part_filled1 = self._extract_filled_qty(ord1_latest)
+                    if part_filled1 > 0:
+                        part1_px = float(getattr(ord1_latest, 'filled_avg_price', None) or current_price)
+                        p1_pct = (part1_px - position['entry_price']) / position['entry_price'] * 100
+                        self.db.add_partial_exit(position['id'], part_filled1, part1_px, target_name, p1_pct)
+                        quantity = max(0, quantity - part_filled1)
+                        position['remaining_qty'] = max(0, position['remaining_qty'] - part_filled1)
+                        logger.info(f"[{symbol}] [SOEE Partial Exit Step 1] Partial fill: {part_filled1} shares filled. Remaining target: {quantity} shares.")
+                        if quantity <= 0:
+                            filled_order = ord1_latest
+                    
                     # --- STEP 2: Stepped-Down Marketable Limit Sell ---
                     step2_px = round(max(quote['bid'], quote['mid'] - (quote['spread'] * 0.25)), 2)
                     logger.info(f"[{symbol}] [SOEE Partial Exit Step 2] Submitting Stepped-Down Limit Sell: {quantity} shares @ ${step2_px:.2f}")
@@ -2007,6 +2101,22 @@ class PositionManager:
                         except Exception as ce:
                             logger.warning(f"[{symbol}] Error cancelling Step 2 order: {ce}")
                         time.sleep(1.0)
+                        
+                        # Post-cancellation partial fill accounting
+                        try:
+                            ord2_latest = self.trading_client.get_order_by_id(ord2.id)
+                        except Exception:
+                            ord2_latest = ord2_status
+                        part_filled2 = self._extract_filled_qty(ord2_latest)
+                        if part_filled2 > 0:
+                            part2_px = float(getattr(ord2_latest, 'filled_avg_price', None) or current_price)
+                            p2_pct = (part2_px - position['entry_price']) / position['entry_price'] * 100
+                            self.db.add_partial_exit(position['id'], part_filled2, part2_px, target_name, p2_pct)
+                            quantity = max(0, quantity - part_filled2)
+                            position['remaining_qty'] = max(0, position['remaining_qty'] - part_filled2)
+                            logger.info(f"[{symbol}] [SOEE Partial Exit Step 2] Partial fill: {part_filled2} shares filled. Remaining target: {quantity} shares.")
+                            if quantity <= 0:
+                                filled_order = ord2_latest
                         
                         # --- STEP 3: Guarded Market Sell Fallback ---
                         allow_mkt = self.config.get('execution_schedule', 'soee_allow_market_fallback', True)
@@ -2131,6 +2241,11 @@ class PositionManager:
         - Step 2: Stepped-Down Marketable Limit (or 0.2% concession limit)
         - Step 3: Guarded Market Order (if spread <= 0.25%) OR Defensive Marketable Limit (0.5% cap)
         Only Catastrophic Breakers bypass the ladder for immediate Emergency Market Sell.
+        
+        Hardened with Real-Time Broker Synchronization:
+        - Detects partial fills on cancelled orders and decrements remaining shares.
+        - Synchronizes with broker open positions to eliminate 403 'insufficient qty' rejections.
+        - Auto-reconciles and completes remaining quantity under heavy selling pressure.
         """
         symbol = position['symbol']
         remaining = position['remaining_qty']
@@ -2156,8 +2271,11 @@ class PositionManager:
                     side=OrderSide.SELL,
                     time_in_force=TimeInForce.DAY
                 )
-                mkt_ord = self.trading_client.submit_order(mkt_req)
-                is_filled, filled_ord = self._wait_for_order_fill(mkt_ord.id, symbol, timeout_seconds=15)
+                mkt_ord, remaining = self._submit_sell_order_with_reconciliation(mkt_req, position, current_price, reason)
+                if mkt_ord:
+                    is_filled, filled_ord = self._wait_for_order_fill(mkt_ord.id, symbol, timeout_seconds=15)
+                elif remaining <= 0:
+                    return True
             elif quote and quote.get('mid', 0) > 0 and quote.get('spread', 0) > 0:
                 # --- STEP 1: Passive Midpoint Limit Sell ---
                 limit_px = round(quote['mid'], 2)
@@ -2169,86 +2287,182 @@ class PositionManager:
                     time_in_force=TimeInForce.DAY
                 )
                 logger.info(f"[{symbol}] [SOEE Full Exit Step 1] Midpoint Limit Sell: {remaining} shares @ ${limit_px:.2f} (Spread: ${quote['spread']:.2f})")
-                ord1 = self.trading_client.submit_order(ord1_req)
-                is_filled1, ord1_status = self._wait_for_order_fill(ord1.id, symbol, timeout_seconds=step_timeout)
+                ord1, remaining = self._submit_sell_order_with_reconciliation(ord1_req, position, current_price, reason)
+                if ord1 is None and remaining <= 0:
+                    return True
+                
+                is_filled1 = False
+                ord1_status = None
+                if ord1:
+                    is_filled1, ord1_status = self._wait_for_order_fill(ord1.id, symbol, timeout_seconds=step_timeout)
                 
                 if is_filled1 and ord1_status:
                     filled_ord = ord1_status
                     is_filled = True
                 else:
                     # Cancel Step 1 unfilled limit order
-                    try:
-                        self.trading_client.cancel_order_by_id(ord1.id)
-                        logger.info(f"[{symbol}] [SOEE Full Exit Step 1] Unfilled after {step_timeout}s. Cancelled order ID {ord1.id}.")
-                    except Exception as ce:
-                        logger.warning(f"[{symbol}] Error cancelling Step 1 limit order: {ce}")
-                    time.sleep(1.0)
-                    
-                    # --- STEP 2: Stepped-Down Marketable Limit Sell ---
-                    step2_px = round(max(quote['bid'], quote['mid'] - (quote['spread'] * 0.25)), 2)
-                    logger.info(f"[{symbol}] [SOEE Full Exit Step 2] Submitting Stepped-Down Limit Sell: {remaining} shares @ ${step2_px:.2f}")
-                    ord2_req = LimitOrderRequest(
-                        symbol=symbol,
-                        qty=remaining,
-                        limit_price=step2_px,
-                        side=OrderSide.SELL,
-                        time_in_force=TimeInForce.DAY
-                    )
-                    ord2 = self.trading_client.submit_order(ord2_req)
-                    is_filled2, ord2_status = self._wait_for_order_fill(ord2.id, symbol, timeout_seconds=step_timeout)
-                    
-                    if is_filled2 and ord2_status:
-                        filled_ord = ord2_status
-                        is_filled = True
-                    else:
-                        # Cancel Step 2 unfilled limit order
+                    if ord1:
                         try:
-                            self.trading_client.cancel_order_by_id(ord2.id)
-                            logger.info(f"[{symbol}] [SOEE Full Exit Step 2] Unfilled after {step_timeout}s. Cancelled order ID {ord2.id}.")
+                            self.trading_client.cancel_order_by_id(ord1.id)
+                            logger.info(f"[{symbol}] [SOEE Full Exit Step 1] Unfilled after {step_timeout}s. Cancelled order ID {ord1.id}.")
                         except Exception as ce:
-                            logger.warning(f"[{symbol}] Error cancelling Step 2 limit order: {ce}")
+                            logger.warning(f"[{symbol}] Error cancelling Step 1 limit order: {ce}")
                         time.sleep(1.0)
                         
-                        # --- STEP 3: Guarded Market Order OR Defensive Marketable Limit ---
-                        allow_mkt = self.config.get('execution_schedule', 'soee_allow_market_fallback', True)
-                        spread_pct = quote['spread'] / current_price if current_price > 0 else 0.0
-                        if allow_mkt and spread_pct <= 0.0025:
-                            logger.info(f"[{symbol}] [SOEE Full Exit Step 3] Tight spread ({spread_pct*100:.2f}%). Submitting Market Order fallback: {remaining} shares.")
-                            mkt_ord = self.trading_client.submit_order(MarketOrderRequest(
-                                symbol=symbol,
-                                qty=remaining,
-                                side=OrderSide.SELL,
-                                time_in_force=TimeInForce.DAY
-                            ))
-                            is_mkt_filled, mkt_status = self._wait_for_order_fill(mkt_ord.id, symbol, timeout_seconds=15)
-                            if is_mkt_filled and mkt_status:
-                                filled_ord = mkt_status
+                        # Check partial fill post-cancellation
+                        try:
+                            ord1_latest = self.trading_client.get_order_by_id(ord1.id)
+                        except Exception:
+                            ord1_latest = ord1_status
+                        part_filled = self._extract_filled_qty(ord1_latest)
+                        if part_filled > 0:
+                            remaining = max(0, remaining - part_filled)
+                            self.db.update_position_quantity(position['id'], remaining)
+                            position['remaining_qty'] = remaining
+                            logger.info(f"[{symbol}] [SOEE Full Exit Step 1] Partial fill detected: {part_filled} shares filled. Remaining: {remaining} shares.")
+                            if remaining <= 0:
+                                filled_ord = ord1_latest or ord1_status
                                 is_filled = True
+
+                    # Verify actual broker position before Step 2
+                    if not is_filled:
+                        broker_remaining = self._get_broker_remaining_qty(symbol)
+                        if broker_remaining is not None:
+                            if broker_remaining <= 0:
+                                logger.info(f"[{symbol}] [SOEE Full Exit Step 1] Broker confirms 0 shares open. Position fully exited.")
+                                remaining = 0
+                                self.db.update_position_quantity(position['id'], 0)
+                                position['remaining_qty'] = 0
+                                is_filled = True
+                            elif broker_remaining < remaining:
+                                logger.warning(f"[{symbol}] [SOEE Sync] Broker position has {broker_remaining} shares, local had {remaining}. Synchronizing.")
+                                remaining = broker_remaining
+                                self.db.update_position_quantity(position['id'], remaining)
+                                position['remaining_qty'] = remaining
+
+                    if not is_filled and remaining > 0:
+                        # --- STEP 2: Stepped-Down Marketable Limit Sell ---
+                        step2_px = round(max(quote['bid'], quote['mid'] - (quote['spread'] * 0.25)), 2)
+                        logger.info(f"[{symbol}] [SOEE Full Exit Step 2] Submitting Stepped-Down Limit Sell: {remaining} shares @ ${step2_px:.2f}")
+                        ord2_req = LimitOrderRequest(
+                            symbol=symbol,
+                            qty=remaining,
+                            limit_price=step2_px,
+                            side=OrderSide.SELL,
+                            time_in_force=TimeInForce.DAY
+                        )
+                        ord2, remaining = self._submit_sell_order_with_reconciliation(ord2_req, position, current_price, reason)
+                        if ord2 is None and remaining <= 0:
+                            return True
+
+                        is_filled2 = False
+                        ord2_status = None
+                        if ord2:
+                            is_filled2, ord2_status = self._wait_for_order_fill(ord2.id, symbol, timeout_seconds=step_timeout)
+                        
+                        if is_filled2 and ord2_status:
+                            filled_ord = ord2_status
+                            is_filled = True
                         else:
-                            # Spread is wide (> 0.25%): Defensive Marketable Limit capped at 0.5% concession
-                            defensive_px = round(current_price * 0.995, 2)
-                            logger.warning(
-                                f"[{symbol}] [SOEE Full Exit Step 3] Spread {spread_pct*100:.2f}% exceeds 0.25% market threshold. "
-                                f"Submitting Defensive Marketable Limit Sell: {remaining} shares @ ${defensive_px:.2f} (0.5% cap) to prevent slippage."
-                            )
-                            lim3_req = LimitOrderRequest(
-                                symbol=symbol,
-                                qty=remaining,
-                                limit_price=defensive_px,
-                                side=OrderSide.SELL,
-                                time_in_force=TimeInForce.DAY
-                            )
-                            lim3_ord = self.trading_client.submit_order(lim3_req)
-                            is_lim3_filled, lim3_status = self._wait_for_order_fill(lim3_ord.id, symbol, timeout_seconds=15)
-                            if is_lim3_filled and lim3_status:
-                                filled_ord = lim3_status
-                                is_filled = True
-                            else:
+                            # Cancel Step 2 unfilled limit order
+                            if ord2:
                                 try:
-                                    self.trading_client.cancel_order_by_id(lim3_ord.id)
-                                    logger.info(f"[{symbol}] [SOEE Full Exit Step 3] Defensive limit unfilled. Cancelled order ID {lim3_ord.id}.")
+                                    self.trading_client.cancel_order_by_id(ord2.id)
+                                    logger.info(f"[{symbol}] [SOEE Full Exit Step 2] Unfilled after {step_timeout}s. Cancelled order ID {ord2.id}.")
+                                except Exception as ce:
+                                    logger.warning(f"[{symbol}] Error cancelling Step 2 limit order: {ce}")
+                                time.sleep(1.0)
+                                
+                                try:
+                                    ord2_latest = self.trading_client.get_order_by_id(ord2.id)
                                 except Exception:
-                                    pass
+                                    ord2_latest = ord2_status
+                                part_filled2 = self._extract_filled_qty(ord2_latest)
+                                if part_filled2 > 0:
+                                    remaining = max(0, remaining - part_filled2)
+                                    self.db.update_position_quantity(position['id'], remaining)
+                                    position['remaining_qty'] = remaining
+                                    logger.info(f"[{symbol}] [SOEE Full Exit Step 2] Partial fill detected: {part_filled2} shares filled. Remaining: {remaining} shares.")
+                                    if remaining <= 0:
+                                        filled_ord = ord2_latest or ord2_status
+                                        is_filled = True
+
+                            # Verify actual broker position before Step 3
+                            if not is_filled:
+                                broker_remaining = self._get_broker_remaining_qty(symbol)
+                                if broker_remaining is not None:
+                                    if broker_remaining <= 0:
+                                        logger.info(f"[{symbol}] [SOEE Full Exit Step 2] Broker confirms 0 shares open. Position fully exited.")
+                                        remaining = 0
+                                        self.db.update_position_quantity(position['id'], 0)
+                                        position['remaining_qty'] = 0
+                                        is_filled = True
+                                    elif broker_remaining < remaining:
+                                        logger.warning(f"[{symbol}] [SOEE Sync] Broker position has {broker_remaining} shares, local had {remaining}. Synchronizing.")
+                                        remaining = broker_remaining
+                                        self.db.update_position_quantity(position['id'], remaining)
+                                        position['remaining_qty'] = remaining
+
+                            if not is_filled and remaining > 0:
+                                # --- STEP 3: Guarded Market Order OR Defensive Marketable Limit ---
+                                allow_mkt = self.config.get('execution_schedule', 'soee_allow_market_fallback', True)
+                                spread_pct = quote['spread'] / current_price if current_price > 0 else 0.0
+                                if allow_mkt and spread_pct <= 0.0025:
+                                    logger.info(f"[{symbol}] [SOEE Full Exit Step 3] Tight spread ({spread_pct*100:.2f}%). Submitting Market Order fallback: {remaining} shares.")
+                                    mkt_req = MarketOrderRequest(
+                                        symbol=symbol,
+                                        qty=remaining,
+                                        side=OrderSide.SELL,
+                                        time_in_force=TimeInForce.DAY
+                                    )
+                                    mkt_ord, remaining = self._submit_sell_order_with_reconciliation(mkt_req, position, current_price, reason)
+                                    if mkt_ord:
+                                        is_mkt_filled, mkt_status = self._wait_for_order_fill(mkt_ord.id, symbol, timeout_seconds=15)
+                                        if is_mkt_filled and mkt_status:
+                                            filled_ord = mkt_status
+                                            is_filled = True
+                                    elif remaining <= 0:
+                                        return True
+                                else:
+                                    # Spread is wide (> 0.25%): Defensive Marketable Limit capped at 0.5% concession
+                                    defensive_px = round(current_price * 0.995, 2)
+                                    logger.warning(
+                                        f"[{symbol}] [SOEE Full Exit Step 3] Spread {spread_pct*100:.2f}% exceeds 0.25% market threshold. "
+                                        f"Submitting Defensive Marketable Limit Sell: {remaining} shares @ ${defensive_px:.2f} (0.5% cap) to prevent slippage."
+                                    )
+                                    lim3_req = LimitOrderRequest(
+                                        symbol=symbol,
+                                        qty=remaining,
+                                        limit_price=defensive_px,
+                                        side=OrderSide.SELL,
+                                        time_in_force=TimeInForce.DAY
+                                    )
+                                    lim3_ord, remaining = self._submit_sell_order_with_reconciliation(lim3_req, position, current_price, reason)
+                                    if lim3_ord:
+                                        is_lim3_filled, lim3_status = self._wait_for_order_fill(lim3_ord.id, symbol, timeout_seconds=15)
+                                        if is_lim3_filled and lim3_status:
+                                            filled_ord = lim3_status
+                                            is_filled = True
+                                        else:
+                                            try:
+                                                self.trading_client.cancel_order_by_id(lim3_ord.id)
+                                                logger.info(f"[{symbol}] [SOEE Full Exit Step 3] Defensive limit unfilled. Cancelled order ID {lim3_ord.id}.")
+                                            except Exception:
+                                                pass
+                                            try:
+                                                lim3_latest = self.trading_client.get_order_by_id(lim3_ord.id)
+                                            except Exception:
+                                                lim3_latest = lim3_status
+                                            part_filled3 = self._extract_filled_qty(lim3_latest)
+                                            if part_filled3 > 0:
+                                                remaining = max(0, remaining - part_filled3)
+                                                self.db.update_position_quantity(position['id'], remaining)
+                                                position['remaining_qty'] = remaining
+                                                if remaining <= 0:
+                                                    filled_ord = lim3_latest or lim3_status
+                                                    is_filled = True
+                                    elif remaining <= 0:
+                                        return True
             else:
                 # Quote is unavailable or book is distorted: Use Pegged / Concession Limit Orders
                 peg_px = round(current_price, 2)
@@ -2260,43 +2474,97 @@ class PositionManager:
                     side=OrderSide.SELL,
                     time_in_force=TimeInForce.DAY
                 )
-                ord_peg = self.trading_client.submit_order(req_peg)
-                is_peg_filled, peg_status = self._wait_for_order_fill(ord_peg.id, symbol, timeout_seconds=step_timeout)
+                ord_peg, remaining = self._submit_sell_order_with_reconciliation(req_peg, position, current_price, reason)
+                if ord_peg is None and remaining <= 0:
+                    return True
+                
+                is_peg_filled = False
+                peg_status = None
+                if ord_peg:
+                    is_peg_filled, peg_status = self._wait_for_order_fill(ord_peg.id, symbol, timeout_seconds=step_timeout)
                 
                 if is_peg_filled and peg_status:
                     filled_ord = peg_status
                     is_filled = True
                 else:
-                    try:
-                        self.trading_client.cancel_order_by_id(ord_peg.id)
-                        logger.info(f"[{symbol}] [SOEE Full Exit Pegged] Unfilled after {step_timeout}s. Cancelled order ID {ord_peg.id}.")
-                    except Exception:
-                        pass
-                    time.sleep(1.0)
-                    
-                    # Concession Limit Sell capped at 0.5% below market
-                    conc_px = round(current_price * 0.995, 2)
-                    logger.info(f"[{symbol}] [SOEE Full Exit Concession] Submitting Defensive Concession Limit Sell: {remaining} shares @ ${conc_px:.2f}")
-                    req_conc = LimitOrderRequest(
-                        symbol=symbol,
-                        qty=remaining,
-                        limit_price=conc_px,
-                        side=OrderSide.SELL,
-                        time_in_force=TimeInForce.DAY
-                    )
-                    ord_conc = self.trading_client.submit_order(req_conc)
-                    is_conc_filled, conc_status = self._wait_for_order_fill(ord_conc.id, symbol, timeout_seconds=step_timeout)
-                    
-                    if is_conc_filled and conc_status:
-                        filled_ord = conc_status
-                        is_filled = True
-                    else:
+                    if ord_peg:
                         try:
-                            self.trading_client.cancel_order_by_id(ord_conc.id)
-                            logger.info(f"[{symbol}] [SOEE Full Exit Concession] Unfilled after {step_timeout}s. Cancelled order ID {ord_conc.id}.")
+                            self.trading_client.cancel_order_by_id(ord_peg.id)
+                            logger.info(f"[{symbol}] [SOEE Full Exit Pegged] Unfilled after {step_timeout}s. Cancelled order ID {ord_peg.id}.")
                         except Exception:
                             pass
-                        logger.warning(f"[{symbol}] [SOEE Full Exit] Distorted/unquoted book limit sells unfilled. Retaining DB position open for retry.")
+                        time.sleep(1.0)
+                        
+                        try:
+                            peg_latest = self.trading_client.get_order_by_id(ord_peg.id)
+                        except Exception:
+                            peg_latest = peg_status
+                        part_peg = self._extract_filled_qty(peg_latest)
+                        if part_peg > 0:
+                            remaining = max(0, remaining - part_peg)
+                            self.db.update_position_quantity(position['id'], remaining)
+                            position['remaining_qty'] = remaining
+                            if remaining <= 0:
+                                filled_ord = peg_latest or peg_status
+                                is_filled = True
+                    
+                    if not is_filled:
+                        broker_remaining = self._get_broker_remaining_qty(symbol)
+                        if broker_remaining is not None:
+                            if broker_remaining <= 0:
+                                remaining = 0
+                                self.db.update_position_quantity(position['id'], 0)
+                                position['remaining_qty'] = 0
+                                is_filled = True
+                            elif broker_remaining < remaining:
+                                remaining = broker_remaining
+                                self.db.update_position_quantity(position['id'], remaining)
+                                position['remaining_qty'] = remaining
+                    
+                    if not is_filled and remaining > 0:
+                        # Concession Limit Sell capped at 0.5% below market
+                        conc_px = round(current_price * 0.995, 2)
+                        logger.info(f"[{symbol}] [SOEE Full Exit Concession] Submitting Defensive Concession Limit Sell: {remaining} shares @ ${conc_px:.2f}")
+                        req_conc = LimitOrderRequest(
+                            symbol=symbol,
+                            qty=remaining,
+                            limit_price=conc_px,
+                            side=OrderSide.SELL,
+                            time_in_force=TimeInForce.DAY
+                        )
+                        ord_conc, remaining = self._submit_sell_order_with_reconciliation(req_conc, position, current_price, reason)
+                        if ord_conc is None and remaining <= 0:
+                            return True
+                        
+                        is_conc_filled = False
+                        conc_status = None
+                        if ord_conc:
+                            is_conc_filled, conc_status = self._wait_for_order_fill(ord_conc.id, symbol, timeout_seconds=step_timeout)
+                        
+                        if is_conc_filled and conc_status:
+                            filled_ord = conc_status
+                            is_filled = True
+                        else:
+                            if ord_conc:
+                                try:
+                                    self.trading_client.cancel_order_by_id(ord_conc.id)
+                                    logger.info(f"[{symbol}] [SOEE Full Exit Concession] Unfilled after {step_timeout}s. Cancelled order ID {ord_conc.id}.")
+                                except Exception:
+                                    pass
+                                try:
+                                    conc_latest = self.trading_client.get_order_by_id(ord_conc.id)
+                                except Exception:
+                                    conc_latest = conc_status
+                                part_conc = self._extract_filled_qty(conc_latest)
+                                if part_conc > 0:
+                                    remaining = max(0, remaining - part_conc)
+                                    self.db.update_position_quantity(position['id'], remaining)
+                                    position['remaining_qty'] = remaining
+                                    if remaining <= 0:
+                                        filled_ord = conc_latest or conc_status
+                                        is_filled = True
+                            if not is_filled:
+                                logger.warning(f"[{symbol}] [SOEE Full Exit] Distorted/unquoted book limit sells unfilled. Retaining DB position open for retry.")
                     
             if not filled_ord or not is_filled:
                 logger.critical(
@@ -2311,7 +2579,7 @@ class PositionManager:
             self.daily_exits.append({
                 'symbol': symbol,
                 'exit_type': 'Full Exit',
-                'qty': remaining,
+                'qty': position.get('quantity', remaining),
                 'exit_price': actual_exit_px,
                 'profit_pct': profit_pct,
                 'reason': reason,
@@ -2599,6 +2867,29 @@ class RajatAlphaTradingBot:
         end = now.replace(hour=eh, minute=em, second=0)
         return start <= now <= end
 
+    def load_exclusion_list(self) -> set:
+        """
+        Loads excluded ticker symbols from exclusion file (default: config/exclusionlist.txt).
+        Returns a set of uppercase ticker symbols.
+        Lines beginning with '#' or empty lines are ignored.
+        """
+        exclusion_file = self.config.get('trading_rules', 'exclusion_file', 'config/exclusionlist.txt')
+        exclusions = set()
+        if exclusion_file and os.path.exists(exclusion_file):
+            try:
+                with open(exclusion_file, 'r') as f:
+                    for line in f:
+                        line = line.strip()
+                        if line and not line.startswith('#'):
+                            sym = line.split('#')[0].strip().upper()
+                            if sym:
+                                exclusions.add(sym)
+                if exclusions and self.config.get('trading_rules', 'log_excluded_symbols', True):
+                    logger.info(f"📋 Exclusion list loaded: {len(exclusions)} symbols ({', '.join(sorted(exclusions)[:10])}{'...' if len(exclusions) > 10 else ''})")
+            except Exception as e:
+                logger.error(f"Error loading exclusion file {exclusion_file}: {e}")
+        return exclusions
+
     def process_manual_overrides(self):
         """
         Processes manual position overrides from:
@@ -2761,6 +3052,17 @@ class RajatAlphaTradingBot:
         if not open_positions:
             logger.info(f"🛡️ SELL GUARDIAN: No open positions to monitor ({et_now}).")
             return
+            
+        exclusions = self.load_exclusion_list()
+        if exclusions:
+            excluded_positions = [p for p in open_positions if p['symbol'] in exclusions]
+            if excluded_positions:
+                for ep in excluded_positions:
+                    logger.info(f"[{ep['symbol']}] 🚫 Excluded via exclusionlist.txt — skipping all Sell Guardian monitoring (SL, TES, partial exits).")
+                open_positions = [p for p in open_positions if p['symbol'] not in exclusions]
+                if not open_positions:
+                    logger.info(f"🛡️ SELL GUARDIAN: All open positions are excluded via exclusionlist.txt ({et_now}).")
+                    return
         
         is_first_hour = self.is_first_hour()
         market_down = self.is_market_opening_down() if is_first_hour else False
@@ -2900,9 +3202,13 @@ class RajatAlphaTradingBot:
                 logger.info("No candidates maintained qualified status upon 30-min revalidation.")
             
             executed_count = 0
+            exclusions = self.load_exclusion_list()
             for symbol, details in top_signals:
                 if executed_count >= avail:
                     break
+                if symbol in exclusions:
+                    logger.warning(f"[{symbol}] Skipped buy execution: Symbol in exclusionlist.txt.")
+                    continue
                 if self.config.get('trading_rules', 'prevent_same_day_reentry', True) and self.db.was_traded_today(symbol):
                     logger.warning(f"[{symbol}] Skipped buy execution: Traded earlier today (prevent_same_day_reentry).")
                     continue
@@ -2921,7 +3227,15 @@ class RajatAlphaTradingBot:
             return
             
         with open(watchlist_file, 'r') as f:
-            symbols = [line.strip().upper() for line in f if line.strip()]
+            symbols = [line.strip().upper() for line in f if line.strip() and not line.strip().startswith('#')]
+
+        exclusions = self.load_exclusion_list()
+        if exclusions:
+            original_count = len(symbols)
+            symbols = [s for s in symbols if s not in exclusions]
+            excluded_count = original_count - len(symbols)
+            if excluded_count > 0:
+                logger.info(f"🚫 Excluded {excluded_count} symbols from Buy Hunter watchlist via exclusionlist.txt.")
             
         # Check capacity before scanning
         trades_today = self.db.count_trades_today()
